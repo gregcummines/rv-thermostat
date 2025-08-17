@@ -5,13 +5,13 @@ pins:
   active_low: true
 
 control:
-  mode: auto        # off|heat|cool|auto
-  setpoint_c: 22.0  # 71.6°F
+  mode: auto
+  setpoint_c: 22.0
   deadband_c: 0.5
   compressor_min_off_s: 300
   fan_lead_s: 5
   fan_lag_s: 15
 
 sensor:
-  kind: mock        # mock|ds18b20
+  kind: mock
   ds18b20_id: null
