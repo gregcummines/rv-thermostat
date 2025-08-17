@@ -1,0 +1,23 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "UI (Tkinter)",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/apps/ui_tk.py",
+      "console": "integratedTerminal",
+      "envFile": "${workspaceFolder}/.env",
+      "justMyCode": true
+    },
+    {
+      "name": "Headless app",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/apps/app.py",
+      "console": "integratedTerminal",
+      "envFile": "${workspaceFolder}/.env",
+      "justMyCode": true
+    }
+  ]
+}
