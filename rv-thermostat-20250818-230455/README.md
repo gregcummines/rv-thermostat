@@ -1,6 +1,6 @@
 # RV Thermostat — Touch Kiosk Build
 
-This bundle includes the **new touchscreen UI** and the core control loop.
+This bundle includes the **touchscreen kiosk UI** and the core control loop.
 
 ## What’s in this version
 - **Fullscreen, touch-friendly layout** with bold colors (blue/red action buttons, dark card, teal/cyan accents).
@@ -10,7 +10,7 @@ This bundle includes the **new touchscreen UI** and the core control loop.
 - Mode selectors (**OFF / HEAT / COOL / AUTO**) and **setpoint nudgers** (+/−).
 - **Status indicators** for **COOL / HEAT / FAN** change color based on state.
 - **Right-side vertical action bar** (WiFi / Bluetooth / Scheduling / Alarm) as placeholders.
-- **Top bar** with title, **zone badge**, and decorative **Wi‑Fi** indicator.
+- **Top bar** with title, **zone badge**, and decorative **Wi-Fi** indicator.
 - **Clean shutdown**: cancels timers, sets outputs safe, calls `gpio_cleanup()`.
 
 ## Run
@@ -19,6 +19,6 @@ cd rv-thermostat
 python3 -m venv .venv && source .venv/bin/activate
 pip install --upgrade pip -r requirements.txt
 PYTHONPATH=src python apps/ui_touch.py
-# windowed / show mouse for debugging:
+# windowed debug:
 PYTHONPATH=src python apps/ui_touch.py --windowed --show-cursor
 ```

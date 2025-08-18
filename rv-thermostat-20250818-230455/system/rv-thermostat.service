@@ -1,5 +1,5 @@
 [Unit]
-Description=RV Thermostat
+Description=RV Thermostat (Touch Kiosk)
 After=network.target
 
 [Service]
@@ -7,7 +7,7 @@ User=pi
 WorkingDirectory=/home/pi/rv-thermostat
 Environment="PYTHONUNBUFFERED=1"
 Environment="PYTHONPATH=/home/pi/rv-thermostat/src"
-ExecStart=/home/pi/rv-thermostat/.venv/bin/python /home/pi/rv-thermostat/apps/app.py
+ExecStart=/home/pi/rv-thermostat/.venv/bin/python /home/pi/rv-thermostat/apps/ui_touch.py
 Restart=on-failure
 
 [Install]
