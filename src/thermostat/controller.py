@@ -1,18 +1,26 @@
 import time
 from dataclasses import dataclass
+from typing import Literal
 from thermostat.config import Control
 from thermostat.sensors import TemperatureSensor
 from thermostat.actuators import ActuatorController
-from typing import Literal
 
 @dataclass
 class State:
     last_cool_off_at: float | None = None
     last_cool_on_at: float | None = None
-    current_mode: Literal["idle","heating","cooling","off"] = "idle"
+    current_mode: Literal["idle", "heating", "cooling", "off"] = "idle"
+    last_temp_c: float | None = None      # single source of truth for UI
+    last_tick_at: float | None = None     # when we last sampled the sensor
 
 class ThermostatController:
-    def __init__(self, sensor: TemperatureSensor, actuators: ActuatorController, control: Control, logger=print):
+    def __init__(
+        self,
+        sensor: TemperatureSensor,
+        actuators: ActuatorController,
+        control: Control,
+        logger=print,
+    ):
         self.sensor = sensor
         self.act = actuators
         self.cfg = control
@@ -46,10 +54,17 @@ class ThermostatController:
         self.s.current_mode = "idle"
 
     def tick(self):
+        # Read once; stash for UI/other consumers
         t = self.sensor.read_c()
+        self.s.last_temp_c = t
+        self.s.last_tick_at = time.time()
+
         sp = self.cfg.setpoint_c
         db = self.cfg.deadband_c
-        self.log(f"[SENSE] T={t:.2f}°C  SP={sp:.2f}  DB={db:.2f}  Mode={self.cfg.mode}  State={self.s.current_mode}")
+        self.log(
+            f"[SENSE] T={t:.2f}°C  SP={sp:.2f}  DB={db:.2f}  "
+            f"Mode={self.cfg.mode}  State={self.s.current_mode}"
+        )
 
         if self.cfg.mode == "off":
             if self.s.current_mode != "off":
@@ -57,15 +72,16 @@ class ThermostatController:
                 self.s.current_mode = "off"
             return
 
-        cool_call = (self.cfg.mode in ("cool","auto")) and (t > sp + db)
-        heat_call = (self.cfg.mode in ("heat","auto")) and (t < sp - db)
+        cool_call = (self.cfg.mode in ("cool", "auto")) and (t > sp + db)
+        heat_call = (self.cfg.mode in ("heat", "auto")) and (t < sp - db)
 
-        # No simultaneous calls; prioritize stopping first
+        # Neither call: stop if running
         if not cool_call and not heat_call:
-            if self.s.current_mode in ("heating","cooling"):
+            if self.s.current_mode in ("heating", "cooling"):
                 self._stop_hvac()
             return
 
+        # Handle transitions
         if cool_call and self.s.current_mode != "cooling":
             if self.s.current_mode == "heating":
                 self._stop_hvac()
