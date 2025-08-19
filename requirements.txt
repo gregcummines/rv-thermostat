@@ -1,3 +1,4 @@
-RPi.GPIO==0.7.1
+requests==2.32.3
 pydantic==2.8.2
 pyyaml==6.0.2
+RPi.GPIO==0.7.1

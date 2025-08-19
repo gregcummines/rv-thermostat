@@ -1,9 +1,27 @@
+weather:
+  provider: openweathermap
+  api_key: ""
+  units: imperial
+  refresh_minutes: 10
+location:
+  manual:
+    lat: null
+    lon: null
+  enable:
+    gpsd: true
+    wifi: true
+    ip: true
+  wifi:
+    iface: wlan0
+    provider: mls
+    mls_api_key: null
+  ip:
+    provider: ip-api
 pins:
   heat_pin: 17
   cool_pin: 27
   fan_pin: 22
   active_low: true
-
 control:
   mode: auto
   setpoint_c: 22.0
@@ -11,7 +29,7 @@ control:
   compressor_min_off_s: 300
   fan_lead_s: 5
   fan_lag_s: 15
-
+  reading_offset_c: 0.0
 sensor:
   kind: mock
   ds18b20_id: null
