@@ -1,9 +1,7 @@
-# Up to 6 events per day. Times are HH:MM in 24h.
-# mode: off|heat|cool|auto; setpoint in °C (UI converts if needed).
-monday:    []
-tuesday:   []
+monday: []
+tuesday: []
 wednesday: []
-thursday:  []
-friday:    []
-saturday:  []
-sunday:    []
+thursday: []
+friday: []
+saturday: []
+sunday: []
