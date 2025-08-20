@@ -13,6 +13,41 @@ REFRESH_MS=1000; SCHED_MS=60000; WX_MIN=180
 def c_to_f(c): return (c*9.0/5.0)+32.0
 def f_to_c(f): return (f-32.0)*5.0/9.0
 
+class UIConfig:
+    # Layout
+    safe_margin_px = 24
+
+    # Colors
+    bg = "#000000"
+    fg = "#FFFFFF"
+    rail_tile_border = "#FFFFFF"
+    cool_pill = "#1E90FF"
+    heat_pill = "#E74C3C"
+    status_accent = "#7CFC00"
+    text_muted = "#A0A0A0"
+
+    # Fonts (optional defaults)
+    temp_font = ("Helvetica", 160, "bold")
+    temp_unit_font = ("Helvetica", 36, "bold")
+    tile_glyph_font = ("Helvetica", 44, "bold")
+    tile_label_font = ("Helvetica", 12)
+
+# === UI theme wiring (B2 for your branch) ================================
+# Map existing globals to UIConfig so the rest of the file keeps working.
+COL_BG    = UIConfig.bg
+COL_TEXT  = UIConfig.fg
+COL_FRAME = UIConfig.rail_tile_border
+
+# New theme values we'll use for status strip / setpoint pills
+COOL_PILL     = UIConfig.cool_pill
+HEAT_PILL     = UIConfig.heat_pill
+STATUS_ACCENT = UIConfig.status_accent
+TEXT_MUTED    = UIConfig.text_muted
+
+# Safe-margin default if not present in YAML config
+SAFE_MARGIN_DEFAULT = getattr(UIConfig, "safe_margin_px", 24)
+
+
 class SquareTile(tk.Canvas):
     def __init__(self, parent, size, glyph, fg, command):
         super().__init__(parent, width=size, height=size, bg=COL_BG, bd=0, highlightthickness=0)
@@ -25,6 +60,38 @@ class SquareTile(tk.Canvas):
         self.create_rectangle(pad,pad,size-pad,size-pad, outline=COL_FRAME, width=border)
         self.create_text(size/2, size/2, text=self._glyph, fill=self._fg, font=('DejaVu Sans', int(size*0.6), 'bold'))
     def resize(self, size): self.draw(size)
+
+class StatusStrip(tk.Frame):
+    """Top-left status: Wi-Fi + Outside temp."""
+    def __init__(self, parent):
+        super().__init__(parent, bg=COL_BG)
+        self.wifi = tk.Label(self, text='📶', fg=STATUS_ACCENT, bg=COL_BG, font=('DejaVu Sans', 18, 'bold'))
+        self.out_lbl = tk.Label(self, text='Outside --°', fg=TEXT_MUTED, bg=COL_BG, font=('DejaVu Sans', 14))
+        self.wifi.pack(side='left', padx=(0,8))
+        self.out_lbl.pack(side='left')
+    def set_outside(self, s: str|None):
+        self.out_lbl.config(text=f'Outside {s}' if s else 'Outside --°')
+
+
+class Pill(tk.Canvas):
+    """Rounded colored pill that resizes."""
+    def __init__(self, parent, text, bg_hex, command=None):
+        super().__init__(parent, bg=COL_BG, bd=0, highlightthickness=0, height=64, cursor='hand2')
+        self._bg = bg_hex
+        self._label = self.create_text(0, 0, text=text, fill='#FFFFFF', font=('DejaVu Sans', 20, 'bold'))
+        if command:
+            self.bind('<Button-1>', lambda e: command())
+    def set_text(self, s): self.itemconfigure(self._label, text=s)
+    def resize(self, w, h):
+        self.config(width=w, height=h)
+        self.delete('pill')
+        r = max(18, h // 2)
+        self.create_rectangle(r, 0, w - r, h, outline='', fill=self._bg, tags='pill')
+        self.create_oval(0, 0, 2*r, h, outline='', fill=self._bg, tags='pill')
+        self.create_oval(w - 2*r, 0, w, h, outline='', fill=self._bg, tags='pill')
+        fs = max(14, int(h * 0.45))
+        self.itemconfigure(self._label, font=('DejaVu Sans', fs, 'bold'))
+        self.coords(self._label, w // 2, h // 2)
 
 class Router(tk.Frame):
     def __init__(self, root):
@@ -72,6 +139,17 @@ class TouchUI(tk.Tk):
         t=self.ctrl.s.last_temp_c
         temp = f'{c_to_f(t):.0f}' if (t is not None and self.cfg.weather.units=="imperial") else (f'{t:.0f}' if t is not None else '--')
         self.main.set_temp(temp)
+        # Update setpoint pills if values available
+        cool_c = getattr(self.ctrl.s, 'cool_setpoint_c', getattr(self.cfg.control, 'cool_setpoint_c', None))
+        heat_c = getattr(self.ctrl.s, 'heat_setpoint_c', getattr(self.cfg.control, 'heat_setpoint_c', None))
+        if self.cfg.weather.units == "imperial":
+            cool = c_to_f(cool_c) if isinstance(cool_c, (int, float)) else None
+            heat = c_to_f(heat_c) if isinstance(heat_c, (int, float)) else None
+        else:
+            cool = cool_c if isinstance(cool_c, (int, float)) else None
+            heat = heat_c if isinstance(heat_c, (int, float)) else None
+        self.main.set_setpoints(cool, heat)
+
         self.ctrl.tick()
         self.after(REFRESH_MS, self.loop)
 
@@ -113,13 +191,21 @@ class MainScreen(tk.Frame):
         ]
         for t in self.right_tiles: t.pack()
 
-        # Center big temp
-        self.lbl=tk.Label(self.center, text='--', fg=COL_TEXT, bg=COL_BG)
+        # Status strip at top of center
+        self.status = StatusStrip(self.center)
+        self.status.pack(side='top', anchor='w', padx=16, pady=(8,0))
+
+        # Center big temp (with degree symbol)
+        self.lbl = tk.Label(self.center, text='--°', fg=COL_TEXT, bg=COL_BG)
         self.lbl.pack(expand=True)
 
-        # outside temp under top-left
-        self.out_lbl=tk.Label(self.left, text='', fg=COL_TEXT, bg=COL_BG, font=('DejaVu Sans', 16))
-        self.out_lbl.pack(pady=(4,0))
+        # Setpoint pills at bottom
+        self.pills = tk.Frame(self.center, bg=COL_BG)
+        self.pills.pack(side='bottom', fill='x', padx=16, pady=(0,16))
+        self.cool_pill = Pill(self.pills, 'Cool to --°', COOL_PILL, command=lambda: app.router.show('mode'))
+        self.heat_pill = Pill(self.pills, 'Heat to --°', HEAT_PILL, command=lambda: app.router.show('mode'))
+        self.cool_pill.pack(side='left', expand=True, fill='x', padx=(0,10))
+        self.heat_pill.pack(side='left', expand=True, fill='x', padx=(10,0))
 
         # reflow guarantee: 4 rows always fit
         self.bind('<Configure>', self._layout)
@@ -127,7 +213,7 @@ class MainScreen(tk.Frame):
     def _layout(self, e=None):
         W=self.winfo_width() or self.winfo_screenwidth()
         H=self.winfo_height() or self.winfo_screenheight()
-        m=int(getattr(self.app.cfg.ui,'safe_margin_px',24))
+        m = int(getattr(self.app.cfg.ui, 'safe_margin_px', SAFE_MARGIN_DEFAULT))
         gap=max(8,int(min(W,H)*0.02))
         square = (H - 2*m - 3*gap) // 4
         square = max(72, square)
@@ -141,8 +227,36 @@ class MainScreen(tk.Frame):
         font_px = max(80, int(center_h * 0.50))
         self.lbl.config(font=tkfont.Font(size=font_px, weight='bold'))
 
-    def set_temp(self, s): self.lbl.config(text=s)
-    def set_outside(self, s): self.out_lbl.config(text=s or '')
+        # Resize the setpoint pills based on center size
+        self.update_idletasks()
+        cw = self.center.winfo_width() or (W - 2*(square + 2*m))
+        ch = self.center.winfo_height() or (H - 2*m)
+        pill_h = max(56, int(ch * 0.12))
+        inner_gap = 20
+        pill_w = max(160, int((cw - 16*2 - inner_gap) / 2))
+        self.cool_pill.resize(pill_w, pill_h)
+        self.heat_pill.resize(pill_w, pill_h)
+
+
+    def set_temp(self, s):
+        # add degree symbol if numeric
+        if isinstance(s, str) and s and s[-1] != '°' and s.replace('.','',1).isdigit():
+            self.lbl.config(text=f'{s}°')
+        elif isinstance(s, (int, float)):
+            self.lbl.config(text=f'{s:.0f}°')
+        else:
+            self.lbl.config(text=s or '--°')
+
+    def set_outside(self, s):
+        # now updates the status strip
+        self.status.set_outside(s)
+
+    def set_setpoints(self, cool_f=None, heat_f=None):
+        if isinstance(cool_f, (int, float)):
+            self.cool_pill.set_text(f'Cool to {cool_f:.0f}°')
+        if isinstance(heat_f, (int, float)):
+            self.heat_pill.set_text(f'Heat to {heat_f:.0f}°')
+
 
     def _power_off(self):
         self.app.cfg.control.mode='off'
