@@ -2,22 +2,16 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "UI (Tkinter)",
+      "name": "Run Thermostat UI",
       "type": "python",
       "request": "launch",
-      "program": "${workspaceFolder}/apps/ui_tk.py",
+      "program": "${workspaceFolder}/apps/ui_touch.py",
       "console": "integratedTerminal",
-      "envFile": "${workspaceFolder}/.env",
-      "justMyCode": true
-    },
-    {
-      "name": "Headless app",
-      "type": "python",
-      "request": "launch",
-      "program": "${workspaceFolder}/apps/app.py",
-      "console": "integratedTerminal",
-      "envFile": "${workspaceFolder}/.env",
-      "justMyCode": true
+      "justMyCode": true,
+      "env": {
+        "PYTHONUNBUFFERED": "1",
+        "DISPLAY": ":0"
+      }
     }
   ]
 }

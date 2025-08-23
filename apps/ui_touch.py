@@ -73,25 +73,283 @@ class StatusStrip(tk.Frame):
         self.out_lbl.config(text=f'Outside {s}' if s else 'Outside --°')
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    def set_status(self, status: str):
+        """
+        status: 'ok' | 'no_internet' | 'disconnected'
+        - ok           -> green
+        - no_internet  -> red
+        - disconnected -> dark blue
+        """
+        color = {
+            'ok': '#00C853',
+            'no_internet': '#E53935',
+            'disconnected': '#0A3D91',
+        }.get(status, STATUS_ACCENT)
+        self.wifi.config(fg=color)
+
+
 class Pill(tk.Canvas):
-    """Rounded colored pill that resizes."""
-    def __init__(self, parent, text, bg_hex, command=None):
+    def __init__(self, parent, label_text, bg_hex, command=None):
         super().__init__(parent, bg=COL_BG, bd=0, highlightthickness=0, height=64, cursor='hand2')
         self._bg = bg_hex
-        self._label = self.create_text(0, 0, text=text, fill='#FFFFFF', font=('DejaVu Sans', 20, 'bold'))
+        self._label_item = self.create_text(0, 0, text=label_text, fill='#FFFFFF',
+                                            font=('DejaVu Sans', 14, 'normal'), tags=('pill_label',))
+        self._value_item = self.create_text(0, 0, text='--° F', fill='#FFFFFF',
+                                            font=('DejaVu Sans', 24, 'bold'), tags=('pill_value',))
         if command:
             self.bind('<Button-1>', lambda e: command())
-    def set_text(self, s): self.itemconfigure(self._label, text=s)
+
+    def set_value(self, value_text):
+        self.itemconfigure(self._value_item, text=value_text)
+
     def resize(self, w, h):
         self.config(width=w, height=h)
-        self.delete('pill')
+        self.delete('pill_bg')
         r = max(18, h // 2)
-        self.create_rectangle(r, 0, w - r, h, outline='', fill=self._bg, tags='pill')
-        self.create_oval(0, 0, 2*r, h, outline='', fill=self._bg, tags='pill')
-        self.create_oval(w - 2*r, 0, w, h, outline='', fill=self._bg, tags='pill')
-        fs = max(14, int(h * 0.45))
-        self.itemconfigure(self._label, font=('DejaVu Sans', fs, 'bold'))
-        self.coords(self._label, w // 2, h // 2)
+        self.create_rectangle(r, 0, w - r, h, outline='', fill=self._bg, tags='pill_bg')
+        self.create_oval(0, 0, 2*r, h, outline='', fill=self._bg, tags='pill_bg')
+        self.create_oval(w - 2*r, 0, w, h, outline='', fill=self._bg, tags='pill_bg')
+
+        # layout: small label on top, big value below
+        label_fs = max(12, int(h * 0.28))
+        value_fs = max(18, int(h * 0.46))
+        self.itemconfigure(self._label_item, font=('DejaVu Sans', label_fs, 'normal'))
+        self.itemconfigure(self._value_item,  font=('DejaVu Sans', value_fs, 'bold'))
+        # vertical positions
+        self.coords(self._label_item, w//2, int(h*0.35))
+        self.coords(self._value_item,  w//2, int(h*0.72))
+        # ensure text on top
+        self.tag_raise(self._label_item); self.tag_raise(self._value_item)
 
 class Router(tk.Frame):
     def __init__(self, root):
@@ -158,38 +416,55 @@ class TouchUI(tk.Tk):
         self.after(SCHED_MS, self.sched_loop)
 
     def weather_loop(self):
-        now=time.time()
-        if now-self._last_wx >= WX_MIN:
-            loc=resolve_location(self.cfg)
+        now = time.time()
+        if now - self._last_wx >= WX_MIN:
+            status = 'disconnected'  # default until proven otherwise
+            outside = None
+
+            loc = resolve_location(self.cfg)
             if loc and self.cfg.weather.api_key:
-                data=owm_current(loc['lat'], loc['lon'], self.cfg.weather.api_key, self.cfg.weather.units)
-                self.main.set_outside(fmt_temp(data.get('temp') if data else None, self.cfg.weather.units))
-            self._last_wx=now
+                try:
+                    data = owm_current(loc['lat'], loc['lon'],
+                                    self.cfg.weather.api_key, self.cfg.weather.units)
+                    if data and (data.get('temp') is not None):
+                        outside = fmt_temp(data.get('temp'), self.cfg.weather.units)
+                        status = 'ok'
+                    else:
+                        status = 'no_internet'
+                except Exception:
+                    status = 'no_internet'
+            else:
+                status = 'disconnected'
+
+            # push updates to the UI
+            self.main.set_outside(outside)
+            self.main.set_status(status)
+
+            self._last_wx = now
+
         self.after(1000, self.weather_loop)
 
 class MainScreen(tk.Frame):
     def __init__(self, app):
         super().__init__(app.router, bg=COL_BG); self.app=app
         # Columns: left rail, center, right rail
-        self.left=tk.Frame(self, bg=COL_BG); self.left.pack(side='left', fill='y')
-        self.center=tk.Frame(self, bg=COL_BG); self.center.pack(side='left', fill='both', expand=True)
-        self.right=tk.Frame(self, bg=COL_BG); self.right.pack(side='left', fill='y')
+        self.left  = tk.Frame(self, bg=COL_BG); self.left.pack(side='left',  fill='y')
+        self.right = tk.Frame(self, bg=COL_BG); self.right.pack(side='right', fill='y')   # <-- changed
+        self.center= tk.Frame(self, bg=COL_BG); self.center.pack(side='left', fill='both', expand=True)
 
-        # Tiles (callbacks route to screens)
-        self.left_tiles=[
-            SquareTile(self.left, 100, '☀', '#ffe680', lambda: app.router.show('weather')),
-            SquareTile(self.left, 100, 'ℹ', '#20d16b', lambda: app.router.show('info')),
-            SquareTile(self.left, 100, '⚙', '#cfe3ff', lambda: app.router.show('settings')),
-            SquareTile(self.left, 100, '🗓', '#c1ffd7', lambda: app.router.show('schedule')),
+        AS = os.path.join(os.path.dirname(__file__), '..', 'assets')
+        self.left_tiles = [
+            ImageTile(self.left, 100, os.path.join(AS, 'weather.png'), lambda: app.router.show('weather')),
+            ImageTile(self.left, 100, os.path.join(AS, 'info.png'),     lambda: app.router.show('info')),
+            ImageTile(self.left, 100, os.path.join(AS, 'settings.png'), lambda: app.router.show('settings')),
+            ImageTile(self.left, 100, os.path.join(AS, 'schedule.png'), lambda: app.router.show('schedule')),
         ]
-        for t in self.left_tiles: t.pack()
-        self.right_tiles=[
-            SquareTile(self.right, 100, '❄', '#9cd9ff', lambda: app.router.show('mode')),
-            SquareTile(self.right, 100, '🔥', '#ffb07c', lambda: app.router.show('mode')),
-            SquareTile(self.right, 100, '🌀', '#00c853', lambda: app.router.show('fan')),
-            SquareTile(self.right, 100, '⏻', '#ff6666', self._power_off),
+        self.right_tiles = [
+            ImageTile(self.right, 100, os.path.join(AS, 'snow.png'),  lambda: app.router.show('mode')),
+            ImageTile(self.right, 100, os.path.join(AS, 'flame.png'), lambda: app.router.show('mode')),
+            ImageTile(self.right, 100, os.path.join(AS, 'fan.png'),   lambda: app.router.show('fan')),
+            ImageTile(self.right, 100, os.path.join(AS, 'power.png'), self._power_off),
         ]
-        for t in self.right_tiles: t.pack()
 
         # Status strip at top of center
         self.status = StatusStrip(self.center)
@@ -202,8 +477,8 @@ class MainScreen(tk.Frame):
         # Setpoint pills at bottom
         self.pills = tk.Frame(self.center, bg=COL_BG)
         self.pills.pack(side='bottom', fill='x', padx=16, pady=(0,16))
-        self.cool_pill = Pill(self.pills, 'Cool to --°', COOL_PILL, command=lambda: app.router.show('mode'))
-        self.heat_pill = Pill(self.pills, 'Heat to --°', HEAT_PILL, command=lambda: app.router.show('mode'))
+        self.cool_pill = Pill(self.pills, 'Cool to', COOL_PILL, command=lambda: app.router.show('mode'))
+        self.heat_pill = Pill(self.pills, 'Heat to', HEAT_PILL, command=lambda: app.router.show('mode'))
         self.cool_pill.pack(side='left', expand=True, fill='x', padx=(0,10))
         self.heat_pill.pack(side='left', expand=True, fill='x', padx=(10,0))
 
@@ -225,7 +500,7 @@ class MainScreen(tk.Frame):
         # center font
         center_h = H - 2*m
         font_px = max(80, int(center_h * 0.50))
-        self.lbl.config(font=tkfont.Font(size=font_px, weight='bold'))
+        self.lbl.config(font=tkfont.Font(family='DejaVu Sans', size=font_px, weight='normal'))
 
         # Resize the setpoint pills based on center size
         self.update_idletasks()
@@ -239,13 +514,12 @@ class MainScreen(tk.Frame):
 
 
     def set_temp(self, s):
-        # add degree symbol if numeric
-        if isinstance(s, str) and s and s[-1] != '°' and s.replace('.','',1).isdigit():
-            self.lbl.config(text=f'{s}°')
+        if isinstance(s, str) and s.replace('.','',1).isdigit():
+            self.lbl.config(text=s)  # no degree symbol on the big number
         elif isinstance(s, (int, float)):
-            self.lbl.config(text=f'{s:.0f}°')
+            self.lbl.config(text=f'{s:.0f}')
         else:
-            self.lbl.config(text=s or '--°')
+            self.lbl.config(text='--')
 
     def set_outside(self, s):
         # now updates the status strip
@@ -253,15 +527,41 @@ class MainScreen(tk.Frame):
 
     def set_setpoints(self, cool_f=None, heat_f=None):
         if isinstance(cool_f, (int, float)):
-            self.cool_pill.set_text(f'Cool to {cool_f:.0f}°')
+            self.cool_pill.set_value(f'{cool_f:.0f}° F')
         if isinstance(heat_f, (int, float)):
-            self.heat_pill.set_text(f'Heat to {heat_f:.0f}°')
-
+            self.heat_pill.set_value(f'{heat_f:.0f}° F')
 
     def _power_off(self):
         self.app.cfg.control.mode='off'
         # immediate tick so relays follow
         self.app.ctrl.tick()
+
+    def set_status(self, status: str):
+        self.status.set_status(status)
+
+class ImageTile(SquareTile):
+    def __init__(self, parent, size, image_path, command):
+        self._img_path = image_path
+        self._photo = None
+        super().__init__(parent, size, glyph='', fg='#FFFFFF', command=command)
+
+    def draw(self, size):
+        self.delete('all')
+        pad=max(4,int(size*0.04)); border=max(2,int(size*0.02))
+        self.config(width=size, height=size)
+        self.create_rectangle(pad,pad,size-pad,size-pad, outline=COL_FRAME, width=border)
+        # load/scale image
+        if self._img_path and os.path.exists(self._img_path):
+            # Tk PhotoImage only does nearest scaling; for crispness, provide multiple icon sizes if needed.
+            self._photo = tk.PhotoImage(file=self._img_path).subsample(max(1, int(self._photo_width()/size)))
+            # simpler approach: center the raw image and accept nearest scaling
+            self._photo = tk.PhotoImage(file=self._img_path)
+            iw = int(size * 0.58); ih = iw
+            try:
+                self._photo = self._photo.subsample(max(1, self._photo.width() // iw))
+            except Exception:
+                pass
+            self.create_image(size//2, size//2, image=self._photo)
 
 class ModeScreen(Screen):
     def __init__(self, app):
