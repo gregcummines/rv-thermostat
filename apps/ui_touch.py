@@ -1,4 +1,4 @@
-import os, sys, signal, argparse, time, datetime as dt
+import os, sys, signal, argparse, time, datetime as dt, socket
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 import tkinter as tk
 from tkinter import ttk
@@ -60,263 +60,6 @@ class SquareTile(tk.Canvas):
         self.create_rectangle(pad,pad,size-pad,size-pad, outline=COL_FRAME, width=border)
         self.create_text(size/2, size/2, text=self._glyph, fill=self._fg, font=('DejaVu Sans', int(size*0.6), 'bold'))
     def resize(self, size): self.draw(size)
-
-class StatusStrip(tk.Frame):
-    """Top-left status: Wi-Fi + Outside temp."""
-    def __init__(self, parent):
-        super().__init__(parent, bg=COL_BG)
-        self.wifi = tk.Label(self, text='📶', fg=STATUS_ACCENT, bg=COL_BG, font=('DejaVu Sans', 18, 'bold'))
-        self.out_lbl = tk.Label(self, text='Outside --°', fg=TEXT_MUTED, bg=COL_BG, font=('DejaVu Sans', 14))
-        self.wifi.pack(side='left', padx=(0,8))
-        self.out_lbl.pack(side='left')
-    def set_outside(self, s: str|None):
-        self.out_lbl.config(text=f'Outside {s}' if s else 'Outside --°')
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    def set_status(self, status: str):
-        """
-        status: 'ok' | 'no_internet' | 'disconnected'
-        - ok           -> green
-        - no_internet  -> red
-        - disconnected -> dark blue
-        """
-        color = {
-            'ok': '#00C853',
-            'no_internet': '#E53935',
-            'disconnected': '#0A3D91',
-        }.get(status, STATUS_ACCENT)
-        self.wifi.config(fg=color)
-
 
 class Pill(tk.Canvas):
     def __init__(self, parent, label_text, bg_hex, command=None):
@@ -390,7 +133,11 @@ class TouchUI(tk.Tk):
         self.router.show('home')
 
         self._last_wx=0
-        self.after(REFRESH_MS, self.loop); self.after(SCHED_MS, self.sched_loop); self.after(1500, self.weather_loop)
+        # Better Python style would be:
+        self.after(REFRESH_MS, self.loop)
+        self.after(SCHED_MS, self.sched_loop) 
+        self.after(1000, self.network_status_loop)  # Add network status check
+        self.after(1500, self.weather_loop)
 
     # loops
     def loop(self):
@@ -415,12 +162,42 @@ class TouchUI(tk.Tk):
         apply_schedule_if_due(self.ctrl, dt.datetime.now())
         self.after(SCHED_MS, self.sched_loop)
 
+    def check_network_status(self):
+        """Check network connectivity status. Returns 'ok', 'no_internet', or 'disconnected'"""
+        try:
+            # Check if we have a Wi-Fi connection
+            import subprocess
+            result = subprocess.run(['iwconfig'], capture_output=True, text=True)
+            if "ESSID:" not in result.stdout:
+                return 'disconnected'  # No Wi-Fi connection
+            
+            # If we have Wi-Fi, check internet by trying to reach Google's DNS
+            try:
+                socket.create_connection(("8.8.8.8", 53), timeout=1)
+                return 'ok'  # Connected with internet
+            except OSError:
+                return 'no_internet'  # Wi-Fi but no internet
+                
+        except Exception as e:
+            print(f"Network check error: {e}")  # Debug
+            return 'disconnected'  # Assume disconnected on any error
+
+    def network_status_loop(self):
+        """Update network status every second"""
+        try:
+            status = self.check_network_status()
+            print(f"Got status: {status}")  # Debug
+            if status in ('ok', 'no_internet', 'disconnected'):
+                self.main.set_status(status)
+        except Exception as e:
+            print(f"Error in network_status_loop: {e}")  # Debug
+            pass
+        self.after(1000, self.network_status_loop)
+
     def weather_loop(self):
+        """Get weather data every WX_MIN seconds"""
         now = time.time()
         if now - self._last_wx >= WX_MIN:
-            status = 'disconnected'  # default until proven otherwise
-            outside = None
-
             loc = resolve_location(self.cfg)
             if loc and self.cfg.weather.api_key:
                 try:
@@ -428,20 +205,9 @@ class TouchUI(tk.Tk):
                                     self.cfg.weather.api_key, self.cfg.weather.units)
                     if data and (data.get('temp') is not None):
                         outside = fmt_temp(data.get('temp'), self.cfg.weather.units)
-                        status = 'ok'
-                    else:
-                        status = 'no_internet'
                 except Exception:
-                    status = 'no_internet'
-            else:
-                status = 'disconnected'
-
-            # push updates to the UI
-            self.main.set_outside(outside)
-            self.main.set_status(status)
-
+                    pass
             self._last_wx = now
-
         self.after(1000, self.weather_loop)
 
 class MainScreen(tk.Frame):
@@ -454,7 +220,7 @@ class MainScreen(tk.Frame):
 
         AS = os.path.join(os.path.dirname(__file__), '..', 'assets')
         self.left_tiles = [
-            ImageTile(self.left, 100, os.path.join(AS, 'weather.png'), lambda: app.router.show('weather')),
+            WifiTile(self.left, 100, os.path.join(AS, 'weather.png'), lambda: app.router.show('weather')),
             ImageTile(self.left, 100, os.path.join(AS, 'info.png'),     lambda: app.router.show('info')),
             ImageTile(self.left, 100, os.path.join(AS, 'settings.png'), lambda: app.router.show('settings')),
             ImageTile(self.left, 100, os.path.join(AS, 'schedule.png'), lambda: app.router.show('schedule')),
@@ -465,10 +231,6 @@ class MainScreen(tk.Frame):
             ImageTile(self.right, 100, os.path.join(AS, 'fan.png'),   lambda: app.router.show('fan')),
             ImageTile(self.right, 100, os.path.join(AS, 'power.png'), self._power_off),
         ]
-
-        # Status strip at top of center
-        self.status = StatusStrip(self.center)
-        self.status.pack(side='top', anchor='w', padx=16, pady=(8,0))
 
         # Center big temp (with degree symbol)
         self.lbl = tk.Label(self.center, text='--°', fg=COL_TEXT, bg=COL_BG)
@@ -537,7 +299,7 @@ class MainScreen(tk.Frame):
         self.app.ctrl.tick()
 
     def set_status(self, status: str):
-        self.status.set_status(status)
+        self.left_tiles[0].set_status(status)
 
 class ImageTile(SquareTile):
     def __init__(self, parent, size, image_path, command):
@@ -563,6 +325,66 @@ class ImageTile(SquareTile):
                 pass
             self.create_image(size//2, size//2, image=self._photo)
 
+class WifiTile(ImageTile):
+    def __init__(self, parent, size, image_path, command):
+        self._status = None
+        self._size = size
+        super().__init__(parent, size, image_path, command)
+        
+    def draw(self, size):
+        # Don't call parent's draw to avoid the border rectangle
+        self.delete('all')
+        self.config(width=size, height=size)
+        self._size = size
+        # Redraw status if we have one
+        if self._status:
+            self.set_status(self._status)
+        
+    def set_status(self, status: str):
+        if status != self._status:  # Only update if status changed
+            color = {
+                'ok': '#00C853',          # green
+                'no_internet': '#2196F3', # dark blue
+                'disconnected': '#E53935',  # red
+            }.get(status)
+            
+            if color:
+                # Calculate icon size to fill tile
+                w = self._size
+                icon_size = int(w * 0.8)  # 80% of tile size
+                x = w/2  # center x
+                y = w/2  # center y
+                
+                # Clear previous icon
+                self.delete('wifi_icon')
+                
+                # Draw three Wi-Fi arcs centered in tile, from largest to smallest
+                r = icon_size/2  # Outer arc radius
+                self.create_arc(x-r, y-r, x+r, y+r, 
+                    start=45, extent=90, style='arc', width=4, 
+                    outline=color, tags='wifi_icon')
+                
+                r = icon_size/3  # Middle arc radius
+                self.create_arc(x-r, y-r, x+r, y+r, 
+                    start=45, extent=90, style='arc', width=4, 
+                    outline=color, tags='wifi_icon')
+                
+                r = icon_size/6  # Inner arc radius (made smaller)
+                self.create_arc(x-r, y-r, x+r, y+r, 
+                    start=45, extent=90, style='arc', width=4, 
+                    outline=color, tags='wifi_icon')
+                
+                # Center dot
+                dot_size = icon_size * 0.1  # Made dot smaller
+                self.create_oval(x-dot_size/2, y-dot_size/2, 
+                    x+dot_size/2, y+dot_size/2, 
+                    fill=color, outline=color, tags='wifi_icon')
+                
+                self._status = status
+            else:
+                self.delete('wifi_icon')
+                self._status = None
+                
 class ModeScreen(Screen):
     def __init__(self, app):
         super().__init__(app, 'Mode')
