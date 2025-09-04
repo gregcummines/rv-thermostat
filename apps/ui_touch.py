@@ -344,8 +344,8 @@ class WifiTile(ImageTile):
         if status != self._status:  # Only update if status changed
             color = {
                 'ok': '#00C853',          # green
-                'no_internet': '#2196F3', # dark blue
-                'disconnected': '#E53935',  # red
+                'no_internet': '#2196F3',  # blue
+                'disconnected': '#E53935', # red
             }.get(status)
             
             if color:
@@ -358,6 +358,7 @@ class WifiTile(ImageTile):
                 # Clear previous icon
                 self.delete('wifi_icon')
                 
+                # Draw all elements in the same color
                 # Draw three Wi-Fi arcs centered in tile, from largest to smallest
                 r = icon_size/2  # Outer arc radius
                 self.create_arc(x-r, y-r, x+r, y+r, 
@@ -369,13 +370,13 @@ class WifiTile(ImageTile):
                     start=45, extent=90, style='arc', width=4, 
                     outline=color, tags='wifi_icon')
                 
-                r = icon_size/6  # Inner arc radius (made smaller)
+                r = icon_size/6  # Inner arc radius
                 self.create_arc(x-r, y-r, x+r, y+r, 
                     start=45, extent=90, style='arc', width=4, 
                     outline=color, tags='wifi_icon')
                 
-                # Center dot
-                dot_size = icon_size * 0.1  # Made dot smaller
+                # Center dot in same color as arcs
+                dot_size = icon_size * 0.1
                 self.create_oval(x-dot_size/2, y-dot_size/2, 
                     x+dot_size/2, y+dot_size/2, 
                     fill=color, outline=color, tags='wifi_icon')
