@@ -6,6 +6,8 @@ from tkinter import font as tkfont
 from thermostat.runtime import load_config, build_runtime, apply_schedule_if_due
 from thermostat.geolocate import resolve_location
 from thermostat.weather import owm_current, fmt_temp
+from enum import Enum
+from typing import Callable, List
 
 COL_BG='#000000'; COL_TEXT='#FFFFFF'; COL_FRAME='#FFFFFF'
 REFRESH_MS=1000; SCHED_MS=60000; WX_MIN=180
@@ -47,19 +49,237 @@ TEXT_MUTED    = UIConfig.text_muted
 # Safe-margin default if not present in YAML config
 SAFE_MARGIN_DEFAULT = getattr(UIConfig, "safe_margin_px", 24)
 
+class NetworkStatus(Enum):
+    """Network connectivity states"""
+    CONNECTED = 'ok'          # WiFi + Internet
+    NO_INTERNET = 'no_internet'  # WiFi only
+    DISCONNECTED = 'disconnected'  # No WiFi
 
-class SquareTile(tk.Canvas):
-    def __init__(self, parent, size, glyph, fg, command):
-        super().__init__(parent, width=size, height=size, bg=COL_BG, bd=0, highlightthickness=0)
-        self._glyph=glyph; self._fg=fg; self._cmd=command
-        if command: self.bind('<Button-1>', lambda e: command())
+class NetworkMonitor:
+    """Monitors network connectivity and notifies listeners of changes"""
+    def __init__(self, check_interval_ms: int = 1000):
+        self._status = None
+        self._interval = check_interval_ms
+        self._listeners: List[Callable[[NetworkStatus], None]] = []
+
+    def add_listener(self, callback: Callable[[NetworkStatus], None]) -> None:
+        """Add listener and immediately notify with current status"""
+        self._listeners.append(callback)
+        # Send current status to new listener if we have one
+        if self._status is not None:
+            try:
+                callback(self._status)
+            except Exception as e:
+                print(f"Error notifying new listener: {e}")
+
+    def remove_listener(self, callback: Callable[[NetworkStatus], None]) -> None:
+        if callback in self._listeners:
+            self._listeners.remove(callback)
+
+    def check_status(self) -> NetworkStatus:
+        try:
+            import subprocess
+            result = subprocess.run(['iwconfig'], capture_output=True, text=True)
+            if "ESSID:" not in result.stdout:
+                return NetworkStatus.DISCONNECTED
+            
+            try:
+                socket.create_connection(("8.8.8.8", 53), timeout=1)
+                return NetworkStatus.CONNECTED
+            except OSError:
+                return NetworkStatus.NO_INTERNET
+                
+        except Exception as e:
+            print(f"Network check error: {e}")
+            return NetworkStatus.DISCONNECTED
+
+    def start_monitoring(self, app: 'TouchUI') -> None:
+        """Start periodic network status checking"""
+        try:
+            # Force initial status check and notify
+            current = self.check_status()
+            self._status = current
+            # Notify all listeners of initial status
+            for listener in self._listeners:
+                try:
+                    listener(current)
+                except Exception as e:
+                    print(f"Error in network status listener: {e}")
+        except Exception as e:
+            print(f"Error checking network status: {e}")
+            
+        # Schedule next check
+        app.after(self._interval, lambda: self.start_monitoring(app))
+
+class BaseTile(tk.Canvas):
+    """Base class for all tiles in the thermostat UI"""
+    def __init__(self, parent, size, command=None):
+        super().__init__(parent, width=size, height=size, 
+                        bg=COL_BG, bd=0, highlightthickness=0)
+        self._size = size
+        if command:
+            self.bind('<Button-1>', lambda e: command())
         self.draw(size)
+
     def draw(self, size):
-        self.delete('all'); pad=max(4,int(size*0.04)); border=max(2,int(size*0.02))
+        """Override in subclasses to draw tile content"""
+        self.delete('all')
         self.config(width=size, height=size)
-        self.create_rectangle(pad,pad,size-pad,size-pad, outline=COL_FRAME, width=border)
-        self.create_text(size/2, size/2, text=self._glyph, fill=self._fg, font=('DejaVu Sans', int(size*0.6), 'bold'))
-    def resize(self, size): self.draw(size)
+        self._size = size
+
+    def resize(self, size):
+        self.draw(size)
+
+class WifiTile(BaseTile):
+    """First tile (1) - Shows WiFi connection status"""
+    def __init__(self, parent, size, app):  # Add app parameter
+        self._status = None
+        super().__init__(parent, size)
+        app.network.add_listener(self._on_network_status)
+
+    def _on_network_status(self, status: NetworkStatus) -> None:
+        """Handle network status changes"""            
+        colors = {
+            NetworkStatus.CONNECTED: '#00C853',    # green
+            NetworkStatus.NO_INTERNET: '#0A3D91',  # blue
+            NetworkStatus.DISCONNECTED: '#E53935',  # red
+        }
+        
+        if status != self._status:
+            color = colors.get(status)
+            if color:
+                w = self._size
+                icon_size = int(w * 0.8)
+                x = w/2
+                y = w/2
+                
+                self.delete('wifi_icon')
+                
+                # Draw three Wi-Fi arcs
+                r = icon_size/2
+                self.create_arc(x-r, y-r, x+r, y+r, 
+                    start=45, extent=90, style='arc', width=4, 
+                    outline=color, tags='wifi_icon')
+                
+                r = icon_size/3
+                self.create_arc(x-r, y-r, x+r, y+r, 
+                    start=45, extent=90, style='arc', width=4, 
+                    outline=color, tags='wifi_icon')
+                
+                r = icon_size/6
+                self.create_arc(x-r, y-r, x+r, y+r, 
+                    start=45, extent=90, style='arc', width=4, 
+                    outline=color, tags='wifi_icon')
+                
+                dot_size = icon_size * 0.1
+                self.create_oval(x-dot_size/2, y-dot_size/2, 
+                    x+dot_size/2, y+dot_size/2, 
+                    fill=color, outline=color, tags='wifi_icon')
+                
+                self.update()  # Force immediate update
+                print(f"WiFi icon drawn at {x},{y} with size {icon_size}")  # Debug print
+
+                self._status = status
+            else:
+                self.delete('wifi_icon')
+                self._status = None
+
+class WeatherIndicationTile(BaseTile):
+    """Second tile (2) - Shows weather condition icon"""
+    def __init__(self, parent, size, command=None):
+        self._img_path = os.path.join(os.path.dirname(__file__), '..', 'assets', 'weather.png')
+        self._photo = None
+        super().__init__(parent, size, command)
+
+    # def draw(self, size):
+    #     if os.path.exists(self._img_path):
+    #         self._photo = tk.PhotoImage(file=self._img_path)
+    #         iw = int(size * 0.58)
+    #         try:
+    #             self._photo = self._photo.subsample(max(1, self._photo.width() // iw))
+    #         except Exception:
+    #             pass
+    #         self.create_image(size//2, size//2, image=self._photo)
+
+class OutsideTempTile(BaseTile):
+    """Third tile (3) - Shows outside temperature"""
+    def __init__(self, parent, size):
+        self._temp = None
+        super().__init__(parent, size)
+
+class InformationTile(BaseTile):
+    """Fourth tile (4) - Shows system information"""
+    def __init__(self, parent, size, command=None):
+        self._img_path = os.path.join(os.path.dirname(__file__), '..', 'assets', 'info.png')
+        self._photo = None
+        super().__init__(parent, size, command)
+
+    def draw(self, size):
+        if os.path.exists(self._img_path):
+            self._photo = tk.PhotoImage(file=self._img_path)
+            iw = int(size * 0.58)
+            try:
+                self._photo = self._photo.subsample(max(1, self._photo.width() // iw))
+            except Exception:
+                pass
+            self.create_image(size//2, size//2, image=self._photo)
+
+# Right column tiles
+class ReservedTile(BaseTile):
+    """Fifth tile (5) - Reserved for future use"""
+    def __init__(self, parent, size):
+        super().__init__(parent, size)
+
+class ModeSelectionTile(BaseTile):
+    """Sixth tile (6) - Heat/Cool/Auto mode selection"""
+    def __init__(self, parent, size, command=None):
+        self._img_path = os.path.join(os.path.dirname(__file__), '..', 'assets', 'flame.png')
+        self._photo = None
+        super().__init__(parent, size, command)
+
+    def draw(self, size):
+        if os.path.exists(self._img_path):
+            self._photo = tk.PhotoImage(file=self._img_path)
+            iw = int(size * 0.58)
+            try:
+                self._photo = self._photo.subsample(max(1, self._photo.width() // iw))
+            except Exception:
+                pass
+            self.create_image(size//2, size//2, image=self._photo)
+
+class FanSpeedSelectionTile(BaseTile):
+    """Seventh tile (7) - Fan speed control"""
+    def __init__(self, parent, size, command=None):
+        self._img_path = os.path.join(os.path.dirname(__file__), '..', 'assets', 'fan.png')
+        self._photo = None
+        super().__init__(parent, size, command)
+
+    def draw(self, size):
+        if os.path.exists(self._img_path):
+            self._photo = tk.PhotoImage(file=self._img_path)
+            iw = int(size * 0.58)
+            try:
+                self._photo = self._photo.subsample(max(1, self._photo.width() // iw))
+            except Exception:
+                pass
+            self.create_image(size//2, size//2, image=self._photo)
+
+class SettingsTile(BaseTile):
+    """Eighth tile (8) - System settings"""
+    def __init__(self, parent, size, command=None):
+        self._img_path = os.path.join(os.path.dirname(__file__), '..', 'assets', 'settings.png')
+        self._photo = None
+        super().__init__(parent, size, command)
+
+    def draw(self, size):
+        if os.path.exists(self._img_path):
+            self._photo = tk.PhotoImage(file=self._img_path)
+            iw = int(size * 0.58)
+            try:
+                self._photo = self._photo.subsample(max(1, self._photo.width() // iw))
+            except Exception:
+                pass
+            self.create_image(size//2, size//2, image=self._photo)
 
 class Pill(tk.Canvas):
     def __init__(self, parent, label_text, bg_hex, command=None):
@@ -112,31 +332,50 @@ class Screen(tk.Frame):
 
 class TouchUI(tk.Tk):
     def __init__(self, fullscreen=True, hide_cursor=True):
-        super().__init__(); self.title('RV Thermostat'); self.config(bg=COL_BG)
-        try: self.tk.call('tk', 'scaling', 1.0)
-        except Exception: pass
+        super().__init__()
+        self.title('RV Thermostat')
+        self.config(bg=COL_BG)
+        try: 
+            self.tk.call('tk', 'scaling', 1.0)
+        except Exception: 
+            pass
         self.attributes('-fullscreen', bool(fullscreen))
-        if hide_cursor: self.config(cursor='none')
+        if hide_cursor: 
+            self.config(cursor='none')
         self.bind('<Escape>', lambda e: self.attributes('-fullscreen', False))
 
-        self.cfg=load_config(); self.ctrl,self.act,self.gpio_cleanup=build_runtime(self.cfg)
-        self.router=Router(self)
+        # Create NetworkMonitor
+        self.network = NetworkMonitor()
+        
+        # Load config and create runtime
+        self.cfg = load_config()
+        self.ctrl, self.act, self.gpio_cleanup = build_runtime(self.cfg)
+        self.router = Router(self)
 
-        # Screens
-        self.main=MainScreen(self); self.router.register('home', self.main)
-        self.mode=ModeScreen(self); self.router.register('mode', self.mode)
-        self.fan=FanScreen(self); self.router.register('fan', self.fan)
-        self.settings=SettingsScreen(self); self.router.register('settings', self.settings)
-        self.weather=WeatherScreen(self); self.router.register('weather', self.weather)
-        self.info=InfoScreen(self); self.router.register('info', self.info)
-        self.schedule=ScheduleScreen(self); self.router.register('schedule', self.schedule)
+        # Create screens
+        self.main = MainScreen(self)
+        self.router.register('home', self.main)
+        self.mode = ModeScreen(self)
+        self.router.register('mode', self.mode)
+        self.fan = FanScreen(self)
+        self.router.register('fan', self.fan)
+        self.settings = SettingsScreen(self)
+        self.router.register('settings', self.settings)
+        self.weather = WeatherScreen(self)
+        self.router.register('weather', self.weather)
+        self.info = InfoScreen(self)
+        self.router.register('info', self.info)
+        self.schedule = ScheduleScreen(self)
+        self.router.register('schedule', self.schedule)
         self.router.show('home')
+        self._last_wx = 0
 
-        self._last_wx=0
-        # Better Python style would be:
+        # Start monitoring immediately (don't wait for first interval)
+        self.network.start_monitoring(self)  
+
+        # Start other monitoring loops
         self.after(REFRESH_MS, self.loop)
-        self.after(SCHED_MS, self.sched_loop) 
-        self.after(1000, self.network_status_loop)  # Add network status check
+        self.after(SCHED_MS, self.sched_loop)
         self.after(1500, self.weather_loop)
 
     # loops
@@ -162,38 +401,6 @@ class TouchUI(tk.Tk):
         apply_schedule_if_due(self.ctrl, dt.datetime.now())
         self.after(SCHED_MS, self.sched_loop)
 
-    def check_network_status(self):
-        """Check network connectivity status. Returns 'ok', 'no_internet', or 'disconnected'"""
-        try:
-            # Check if we have a Wi-Fi connection
-            import subprocess
-            result = subprocess.run(['iwconfig'], capture_output=True, text=True)
-            if "ESSID:" not in result.stdout:
-                return 'disconnected'  # No Wi-Fi connection
-            
-            # If we have Wi-Fi, check internet by trying to reach Google's DNS
-            try:
-                socket.create_connection(("8.8.8.8", 53), timeout=1)
-                return 'ok'  # Connected with internet
-            except OSError:
-                return 'no_internet'  # Wi-Fi but no internet
-                
-        except Exception as e:
-            print(f"Network check error: {e}")  # Debug
-            return 'disconnected'  # Assume disconnected on any error
-
-    def network_status_loop(self):
-        """Update network status every second"""
-        try:
-            status = self.check_network_status()
-            print(f"Got status: {status}")  # Debug
-            if status in ('ok', 'no_internet', 'disconnected'):
-                self.main.set_status(status)
-        except Exception as e:
-            print(f"Error in network_status_loop: {e}")  # Debug
-            pass
-        self.after(1000, self.network_status_loop)
-
     def weather_loop(self):
         """Get weather data every WX_MIN seconds"""
         now = time.time()
@@ -215,21 +422,21 @@ class MainScreen(tk.Frame):
         super().__init__(app.router, bg=COL_BG); self.app=app
         # Columns: left rail, center, right rail
         self.left  = tk.Frame(self, bg=COL_BG); self.left.pack(side='left',  fill='y')
-        self.right = tk.Frame(self, bg=COL_BG); self.right.pack(side='right', fill='y')   # <-- changed
+        self.right = tk.Frame(self, bg=COL_BG); self.right.pack(side='right', fill='y')   
         self.center= tk.Frame(self, bg=COL_BG); self.center.pack(side='left', fill='both', expand=True)
 
         AS = os.path.join(os.path.dirname(__file__), '..', 'assets')
         self.left_tiles = [
-            WifiTile(self.left, 100, os.path.join(AS, 'weather.png'), lambda: app.router.show('weather')),
-            ImageTile(self.left, 100, os.path.join(AS, 'info.png'),     lambda: app.router.show('info')),
-            ImageTile(self.left, 100, os.path.join(AS, 'settings.png'), lambda: app.router.show('settings')),
-            ImageTile(self.left, 100, os.path.join(AS, 'schedule.png'), lambda: app.router.show('schedule')),
+            WifiTile(self.left, 100, self.app),  # Pass app reference directly
+            WeatherIndicationTile(self.left, 100, lambda: app.router.show('weather')),
+            OutsideTempTile(self.left, 100),  # No command - display only
+            InformationTile(self.left, 100, lambda: app.router.show('info')),
         ]
         self.right_tiles = [
-            ImageTile(self.right, 100, os.path.join(AS, 'snow.png'),  lambda: app.router.show('mode')),
-            ImageTile(self.right, 100, os.path.join(AS, 'flame.png'), lambda: app.router.show('mode')),
-            ImageTile(self.right, 100, os.path.join(AS, 'fan.png'),   lambda: app.router.show('fan')),
-            ImageTile(self.right, 100, os.path.join(AS, 'power.png'), self._power_off),
+            ReservedTile(self.right, 100),  # No command yet
+            ModeSelectionTile(self.right, 100, lambda: app.router.show('mode')),
+            FanSpeedSelectionTile(self.right, 100, lambda: app.router.show('fan-speed-selection')),
+            SettingsTile(self.right, 100, lambda: app.router.show('settings')),
         ]
 
         # Center big temp (with degree symbol)
@@ -256,9 +463,9 @@ class MainScreen(tk.Frame):
         square = max(72, square)
         # apply to rails
         for i,t in enumerate(self.left_tiles):
-            t.resize(square); t.pack_configure(pady=(m if i==0 else gap//2, m if i==3 else gap//2), padx=m)
+            t.resize(square); t.pack_configure(pady=(m if i==0 else gap//2), padx=m)
         for i,t in enumerate(self.right_tiles):
-            t.resize(square); t.pack_configure(pady=(m if i==0 else gap//2, m if i==3 else gap//2), padx=m)
+            t.resize(square); t.pack_configure(pady=(m if i==0 else gap//2), padx=m)
         # center font
         center_h = H - 2*m
         font_px = max(80, int(center_h * 0.50))
@@ -298,94 +505,6 @@ class MainScreen(tk.Frame):
         # immediate tick so relays follow
         self.app.ctrl.tick()
 
-    def set_status(self, status: str):
-        self.left_tiles[0].set_status(status)
-
-class ImageTile(SquareTile):
-    def __init__(self, parent, size, image_path, command):
-        self._img_path = image_path
-        self._photo = None
-        super().__init__(parent, size, glyph='', fg='#FFFFFF', command=command)
-
-    def draw(self, size):
-        self.delete('all')
-        pad=max(4,int(size*0.04)); border=max(2,int(size*0.02))
-        self.config(width=size, height=size)
-        self.create_rectangle(pad,pad,size-pad,size-pad, outline=COL_FRAME, width=border)
-        # load/scale image
-        if self._img_path and os.path.exists(self._img_path):
-            # Tk PhotoImage only does nearest scaling; for crispness, provide multiple icon sizes if needed.
-            self._photo = tk.PhotoImage(file=self._img_path).subsample(max(1, int(self._photo_width()/size)))
-            # simpler approach: center the raw image and accept nearest scaling
-            self._photo = tk.PhotoImage(file=self._img_path)
-            iw = int(size * 0.58); ih = iw
-            try:
-                self._photo = self._photo.subsample(max(1, self._photo.width() // iw))
-            except Exception:
-                pass
-            self.create_image(size//2, size//2, image=self._photo)
-
-class WifiTile(ImageTile):
-    def __init__(self, parent, size, image_path, command):
-        self._status = None
-        self._size = size
-        super().__init__(parent, size, image_path, command)
-        
-    def draw(self, size):
-        # Don't call parent's draw to avoid the border rectangle
-        self.delete('all')
-        self.config(width=size, height=size)
-        self._size = size
-        # Redraw status if we have one
-        if self._status:
-            self.set_status(self._status)
-        
-    def set_status(self, status: str):
-        if status != self._status:  # Only update if status changed
-            color = {
-                'ok': '#00C853',          # green
-                'no_internet': '#2196F3',  # blue
-                'disconnected': '#E53935', # red
-            }.get(status)
-            
-            if color:
-                # Calculate icon size to fill tile
-                w = self._size
-                icon_size = int(w * 0.8)  # 80% of tile size
-                x = w/2  # center x
-                y = w/2  # center y
-                
-                # Clear previous icon
-                self.delete('wifi_icon')
-                
-                # Draw all elements in the same color
-                # Draw three Wi-Fi arcs centered in tile, from largest to smallest
-                r = icon_size/2  # Outer arc radius
-                self.create_arc(x-r, y-r, x+r, y+r, 
-                    start=45, extent=90, style='arc', width=4, 
-                    outline=color, tags='wifi_icon')
-                
-                r = icon_size/3  # Middle arc radius
-                self.create_arc(x-r, y-r, x+r, y+r, 
-                    start=45, extent=90, style='arc', width=4, 
-                    outline=color, tags='wifi_icon')
-                
-                r = icon_size/6  # Inner arc radius
-                self.create_arc(x-r, y-r, x+r, y+r, 
-                    start=45, extent=90, style='arc', width=4, 
-                    outline=color, tags='wifi_icon')
-                
-                # Center dot in same color as arcs
-                dot_size = icon_size * 0.1
-                self.create_oval(x-dot_size/2, y-dot_size/2, 
-                    x+dot_size/2, y+dot_size/2, 
-                    fill=color, outline=color, tags='wifi_icon')
-                
-                self._status = status
-            else:
-                self.delete('wifi_icon')
-                self._status = None
-                
 class ModeScreen(Screen):
     def __init__(self, app):
         super().__init__(app, 'Mode')
