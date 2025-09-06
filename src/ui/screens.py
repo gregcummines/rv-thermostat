@@ -39,65 +39,92 @@ class Screen(tk.Frame):
 
 class MainScreen(tk.Frame):
     def __init__(self, app):
-        super().__init__(app.router, bg=COL_BG); self.app=app
-        # Columns: left rail, center, right rail
-        self.left  = tk.Frame(self, bg=COL_BG); self.left.pack(side='left',  fill='y')
-        self.right = tk.Frame(self, bg=COL_BG); self.right.pack(side='right', fill='y')   
-        self.center= tk.Frame(self, bg=COL_BG); self.center.pack(side='left', fill='both', expand=True)
+        super().__init__(app.router, bg=COL_BG)
+        self.app = app
+        
+        # Configure grid columns with weights
+        self.grid_columnconfigure(0, weight=0)  # Left column - fixed width
+        self.grid_columnconfigure(1, weight=1)  # Center column - expands
+        self.grid_columnconfigure(2, weight=0)  # Right column - fixed width
+        
+        # Create frames for each column
+        self.left = tk.Frame(self, bg=COL_BG)
+        self.left.grid(row=0, column=0, sticky='ns')
+        
+        self.center = tk.Frame(self, bg=COL_BG)
+        self.center.grid(row=0, column=1, sticky='nsew')
+        
+        self.right = tk.Frame(self, bg=COL_BG)
+        self.right.grid(row=0, column=2, sticky='ns')
 
-        AS = os.path.join(os.path.dirname(__file__), '..', 'assets')
+        # Create and grid the tiles
         self.left_tiles = [
-            WifiTile(self.left, 100, self.app),  # Pass app reference directly
+            WifiTile(self.left, 100, self.app),
             WeatherIndicationTile(self.left, 100, lambda: app.router.show('weather')),
-            OutsideTempTile(self.left, 100),  # No command - display only
-            InformationTile(self.left, 100, lambda: app.router.show('info')),
+            OutsideTempTile(self.left, 100),
+            InformationTile(self.left, 100, lambda: app.router.show('info'))
         ]
+        
         self.right_tiles = [
-            ReservedTile(self.right, 100),  # No command yet
+            ReservedTile(self.right, 100),
             ModeSelectionTile(self.right, 100, lambda: app.router.show('mode')),
             FanSpeedSelectionTile(self.right, 100, lambda: app.router.show('fan-speed-selection')),
-            SettingsTile(self.right, 100, lambda: app.router.show('settings')),
+            SettingsTile(self.right, 100, lambda: app.router.show('settings'))
         ]
 
-        # Center big temp (with degree symbol)
+        # Configure center area
+        self.center.grid_rowconfigure(0, weight=1)  # Temperature expands
+        self.center.grid_rowconfigure(1, weight=0)  # Pills fixed height
+        
+        # Center temperature display
         self.lbl = tk.Label(self.center, text='--°', fg=COL_TEXT, bg=COL_BG)
-        self.lbl.pack(expand=True)
-
-        # Setpoint pills at bottom
+        self.lbl.grid(row=0, column=0, sticky='nsew')
+        
+        # Bottom pills
         self.pills = tk.Frame(self.center, bg=COL_BG)
-        self.pills.pack(side='bottom', fill='x', padx=16, pady=(0,16))
-        self.cool_pill = Pill(self.pills, 'Cool to', COOL_PILL, command=lambda: app.router.show('mode'))
-        self.heat_pill = Pill(self.pills, 'Heat to', HEAT_PILL, command=lambda: app.router.show('mode'))
-        self.cool_pill.pack(side='left', expand=True, fill='x', padx=(0,10))
-        self.heat_pill.pack(side='left', expand=True, fill='x', padx=(10,0))
+        self.pills.grid(row=1, column=0, sticky='ew', padx=16, pady=(0,16))
+        self.pills.grid_columnconfigure(0, weight=1)
+        self.pills.grid_columnconfigure(1, weight=1)
+        
+        self.cool_pill = Pill(self.pills, 'Cool to', COOL_PILL, 
+                            command=lambda: app.router.show('mode'))
+        self.heat_pill = Pill(self.pills, 'Heat to', HEAT_PILL, 
+                            command=lambda: app.router.show('mode'))
+        
+        self.cool_pill.grid(row=0, column=0, sticky='ew', padx=(0,10))
+        self.heat_pill.grid(row=0, column=1, sticky='ew', padx=(10,0))
 
-        # reflow guarantee: 4 rows always fit
+        # Bind layout handler
         self.bind('<Configure>', self._layout)
 
     def _layout(self, e=None):
-        W=self.winfo_width() or self.winfo_screenwidth()
-        H=self.winfo_height() or self.winfo_screenheight()
+        W = self.winfo_width() or self.winfo_screenwidth()
+        H = self.winfo_height() or self.winfo_screenheight()
         m = int(getattr(self.app.cfg.ui, 'safe_margin_px', SAFE_MARGIN_DEFAULT))
-        gap=max(8,int(min(W,H)*0.02))
+        gap = max(8, int(min(W,H)*0.02))
         square = (H - 2*m - 3*gap) // 4
         square = max(72, square)
-        # apply to rails
-        for i,t in enumerate(self.left_tiles):
-            t.resize(square); t.pack_configure(pady=(m if i==0 else gap//2), padx=m)
-        for i,t in enumerate(self.right_tiles):
-            t.resize(square); t.pack_configure(pady=(m if i==0 else gap//2), padx=m)
-        # center font
+
+        # Resize tiles
+        for i, t in enumerate(self.left_tiles):
+            t.resize(square)
+            t.grid(row=i, column=0, pady=(m if i==0 else gap//2), padx=m)
+
+        for i, t in enumerate(self.right_tiles):
+            t.resize(square)
+            t.grid(row=i, column=0, pady=(m if i==0 else gap//2), padx=m)
+
+        # Center font sizing
         center_h = H - 2*m
         font_px = max(80, int(center_h * 0.50))
-        self.lbl.config(font=tkfont.Font(family='DejaVu Sans', size=font_px, weight='normal'))
+        self.lbl.config(font=tkfont.Font(family='DejaVu Sans', 
+                                       size=font_px, 
+                                       weight='normal'))
 
-        # Resize the setpoint pills based on center size
-        self.update_idletasks()
-        cw = self.center.winfo_width() or (W - 2*(square + 2*m))
-        ch = self.center.winfo_height() or (H - 2*m)
-        pill_h = max(56, int(ch * 0.12))
+        # Pill sizing
+        pill_h = max(56, int(center_h * 0.12))
         inner_gap = 20
-        pill_w = max(160, int((cw - 16*2 - inner_gap) / 2))
+        pill_w = max(160, int((W - 2*(square + 2*m) - inner_gap) / 2))
         self.cool_pill.resize(pill_w, pill_h)
         self.heat_pill.resize(pill_w, pill_h)
 

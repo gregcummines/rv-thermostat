@@ -25,57 +25,57 @@ class BaseTile(tk.Canvas):
 
 class WifiTile(BaseTile):
     """First tile (1) - Shows WiFi connection status"""
-    def __init__(self, parent, size, app):  # Add app parameter
+    def __init__(self, parent, size, app):
         self._status = None
         super().__init__(parent, size)
         app.network.add_listener(self._on_network_status)
+        
+    def draw(self, size):
+        """Override draw method to ensure canvas is properly configured"""
+        super().draw(size)  # Configure canvas size
+        if self._status:  # Redraw icon if we have a status
+            self._draw_wifi_icon(self._status)
 
     def _on_network_status(self, status: NetworkStatus) -> None:
         """Handle network status changes"""            
+        if status != self._status:
+            self._status = status
+            self._draw_wifi_icon(status)
+
+    def _draw_wifi_icon(self, status: NetworkStatus) -> None:
+        """Draw the WiFi icon with appropriate color"""
         colors = {
             NetworkStatus.CONNECTED: '#00C853',    # green
             NetworkStatus.NO_INTERNET: '#0A3D91',  # blue
             NetworkStatus.DISCONNECTED: '#E53935',  # red
         }
         
-        if status != self._status:
-            color = colors.get(status)
-            if color:
-                w = self._size
-                icon_size = int(w * 0.8)
-                x = w/2
-                y = w/2
-                
-                self.delete('wifi_icon')
-                
-                # Draw three Wi-Fi arcs
-                r = icon_size/2
-                self.create_arc(x-r, y-r, x+r, y+r, 
-                    start=45, extent=90, style='arc', width=4, 
-                    outline=color, tags='wifi_icon')
-                
-                r = icon_size/3
-                self.create_arc(x-r, y-r, x+r, y+r, 
-                    start=45, extent=90, style='arc', width=4, 
-                    outline=color, tags='wifi_icon')
-                
-                r = icon_size/6
-                self.create_arc(x-r, y-r, x+r, y+r, 
-                    start=45, extent=90, style='arc', width=4, 
-                    outline=color, tags='wifi_icon')
-                
-                dot_size = icon_size * 0.1
-                self.create_oval(x-dot_size/2, y-dot_size/2, 
-                    x+dot_size/2, y+dot_size/2, 
-                    fill=color, outline=color, tags='wifi_icon')
-                
-                self.update()  # Force immediate update
-                print(f"WiFi icon drawn at {x},{y} with size {icon_size}")  # Debug print
+        color = colors.get(status)
+        if not color:
+            self.delete('wifi_icon')
+            return
 
-                self._status = status
-            else:
-                self.delete('wifi_icon')
-                self._status = None
+        w = self._size
+        icon_size = int(w * 0.8)
+        x = w/2
+        y = w/2
+        
+        self.delete('wifi_icon')
+        
+        # Draw three Wi-Fi arcs
+        for radius_factor in (1/2, 1/3, 1/6):
+            r = icon_size * radius_factor
+            self.create_arc(x-r, y-r, x+r, y+r, 
+                start=45, extent=90, style='arc', width=4, 
+                outline=color, tags='wifi_icon')
+        
+        # Center dot
+        dot_size = icon_size * 0.1
+        self.create_oval(x-dot_size/2, y-dot_size/2, 
+            x+dot_size/2, y+dot_size/2, 
+            fill=color, outline=color, tags='wifi_icon')
+        
+        self.update()  # Force immediate update
 
 class WeatherIndicationTile(BaseTile):
     """Second tile (2) - Shows weather condition icon"""
