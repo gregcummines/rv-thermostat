@@ -1,6 +1,6 @@
 import time
 from dataclasses import dataclass
-from thermostat.gpioio import RelayOut
+from src.thermostat.gpioio import RelayOut
 @dataclass
 class Outputs: heat:RelayOut; cool:RelayOut; fan:RelayOut
 class ActuatorController:

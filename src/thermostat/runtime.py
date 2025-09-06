@@ -1,10 +1,10 @@
 import os, yaml, datetime as dt
-from thermostat.config import AppConfig
-from thermostat.sensors import MockSensor, DS18B20Sensor
-from thermostat.gpioio import gpio_cleanup, gpio_init, RelayOut
-from thermostat.actuators import Outputs, ActuatorController
-from thermostat.controller import ThermostatController
-from thermostat.schedule import load_schedule, evaluate
+from src.thermostat.config import AppConfig
+from src.thermostat.sensors import MockSensor, DS18B20Sensor
+from src.thermostat.gpioio import gpio_cleanup, gpio_init, RelayOut
+from src.thermostat.actuators import Outputs, ActuatorController
+from src.thermostat.controller import ThermostatController
+from src.thermostat.schedule import load_schedule, evaluate
 SCHEDULE_PATH='config/schedule.yaml'
 def load_config(path: str | None = None) -> AppConfig:
     for p in ([path] if path else []) + ['config/config.yaml','config.yaml']:

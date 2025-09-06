@@ -1,9 +1,9 @@
 import time
 from dataclasses import dataclass
 from typing import Literal
-from thermostat.config import Control
-from thermostat.sensors import TemperatureSensor
-from thermostat.actuators import ActuatorController
+from src.thermostat.config import Control
+from src.thermostat.sensors import TemperatureSensor
+from src.thermostat.actuators import ActuatorController
 @dataclass
 class State:
     last_cool_off_at: float | None = None
