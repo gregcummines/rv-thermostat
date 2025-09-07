@@ -4,6 +4,7 @@ import signal
 import argparse
 import time
 import datetime as dt
+import math
 
 # Add the root directory to Python path
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -11,6 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 # Then import from src
 from src.ui.config import UIConfig
 from src.ui.network import NetworkMonitor
+from src.ui.weather import WeatherMonitor
 from src.ui.screens import (
     FanScreen, 
     InfoScreen, 
@@ -28,10 +30,10 @@ from src.thermostat.runtime import load_config, build_runtime, apply_schedule_if
 from src.thermostat.geolocate import resolve_location
 from src.thermostat.weather import owm_current, fmt_temp
 
-REFRESH_MS=1000; SCHED_MS=60000; WX_MIN=180
-
-def c_to_f(c): return (c*9.0/5.0)+32.0
-def f_to_c(f): return (f-32.0)*5.0/9.0
+REFRESH_MS=1000; SCHED_MS=60000
+WX_LIMIT_PER_DAY = 1000
+# Add small buffer (+5s) and a floor of 90s
+WX_MIN = max(90, math.ceil(86400 / WX_LIMIT_PER_DAY) + 5)
 
 # === UI theme wiring (B2 for your branch) ================================
 # Map existing globals to UIConfig so the rest of the file keeps working.
@@ -48,6 +50,8 @@ TEXT_MUTED    = UIConfig.text_muted
 # Safe-margin default if not present in YAML config
 SAFE_MARGIN_DEFAULT = getattr(UIConfig, "safe_margin_px", 24)
 
+def c_to_f(c): return (c * 9.0 / 5.0) + 32.0
+
 class TouchUI(tk.Tk):
     def __init__(self, fullscreen=True, hide_cursor=True):
         super().__init__()
@@ -62,13 +66,15 @@ class TouchUI(tk.Tk):
             self.config(cursor='none')
         self.bind('<Escape>', lambda e: self.attributes('-fullscreen', False))
 
-        # Create NetworkMonitor
-        self.network = NetworkMonitor()
-        
         # Load config and create runtime
         self.cfg = load_config()
         self.ctrl, self.act, self.gpio_cleanup = build_runtime(self.cfg)
         self.router = Router(self)
+
+        # Create NetworkMonitor
+        self.network = NetworkMonitor()
+        # Create WeatherMonitor (same pattern)
+        self.weather_monitor = WeatherMonitor(self.cfg, min_period_sec=WX_MIN)
 
         # Create screens
         self.main = MainScreen(self)
@@ -89,51 +95,35 @@ class TouchUI(tk.Tk):
         self._last_wx = 0
 
         # Start monitoring immediately (don't wait for first interval)
-        self.network.start_monitoring(self)  
+        self.network.start_monitoring(self)
+        self.weather_monitor.start_monitoring(self)
 
         # Start other monitoring loops
-        self.after(REFRESH_MS, self.loop)
-        self.after(SCHED_MS, self.sched_loop)
-        self.after(1500, self.weather_loop)
+        # self.after(REFRESH_MS, self.loop)
+        # self.after(SCHED_MS, self.sched_loop)
 
     # loops
-    def loop(self):
-        t=self.ctrl.s.last_temp_c
-        temp = f'{c_to_f(t):.0f}' if (t is not None and self.cfg.weather.units=="imperial") else (f'{t:.0f}' if t is not None else '--')
-        self.main.set_temp(temp)
-        # Update setpoint pills if values available
-        cool_c = getattr(self.ctrl.s, 'cool_setpoint_c', getattr(self.cfg.control, 'cool_setpoint_c', None))
-        heat_c = getattr(self.ctrl.s, 'heat_setpoint_c', getattr(self.cfg.control, 'heat_setpoint_c', None))
-        if self.cfg.weather.units == "imperial":
-            cool = c_to_f(cool_c) if isinstance(cool_c, (int, float)) else None
-            heat = c_to_f(heat_c) if isinstance(heat_c, (int, float)) else None
-        else:
-            cool = cool_c if isinstance(cool_c, (int, float)) else None
-            heat = heat_c if isinstance(heat_c, (int, float)) else None
-        self.main.set_setpoints(cool, heat)
+    # def loop(self):
+    #     t=self.ctrl.s.last_temp_c
+    #     temp = f'{c_to_f(t):.0f}' if (t is not None and self.cfg.weather.units=="imperial") else (f'{t:.0f}' if t is not None else '--')
+    #     self.main.set_temp(temp)
+    #     # Update setpoint pills if values available
+    #     cool_c = getattr(self.ctrl.s, 'cool_setpoint_c', getattr(self.cfg.control, 'cool_setpoint_c', None))
+    #     heat_c = getattr(self.ctrl.s, 'heat_setpoint_c', getattr(self.cfg.control, 'heat_setpoint_c', None))
+    #     if self.cfg.weather.units == "imperial":
+    #         cool = c_to_f(cool_c) if isinstance(cool_c, (int, float)) else None
+    #         heat = c_to_f(heat_c) if isinstance(heat_c, (int, float)) else None
+    #     else:
+    #         cool = cool_c if isinstance(cool_c, (int, float)) else None
+    #         heat = heat_c if isinstance(heat_c, (int, float)) else None
+    #     self.main.set_setpoints(cool, heat)
 
-        self.ctrl.tick()
-        self.after(REFRESH_MS, self.loop)
+    #     self.ctrl.tick()
+    #     self.after(REFRESH_MS, self.loop)
 
-    def sched_loop(self):
-        apply_schedule_if_due(self.ctrl, dt.datetime.now())
-        self.after(SCHED_MS, self.sched_loop)
-
-    def weather_loop(self):
-        """Get weather data every WX_MIN seconds"""
-        now = time.time()
-        if now - self._last_wx >= WX_MIN:
-            loc = resolve_location(self.cfg)
-            if loc and self.cfg.weather.api_key:
-                try:
-                    data = owm_current(loc['lat'], loc['lon'],
-                                    self.cfg.weather.api_key, self.cfg.weather.units)
-                    if data and (data.get('temp') is not None):
-                        outside = fmt_temp(data.get('temp'), self.cfg.weather.units)
-                except Exception:
-                    pass
-            self._last_wx = now
-        self.after(1000, self.weather_loop)
+    # def sched_loop(self):
+    #     apply_schedule_if_due(self.ctrl, dt.datetime.now())
+    #     self.after(SCHED_MS, self.sched_loop)
 
 def main():
     p=argparse.ArgumentParser(); p.add_argument('--windowed', action='store_true'); p.add_argument('--show-cursor', action='store_true'); a=p.parse_args()

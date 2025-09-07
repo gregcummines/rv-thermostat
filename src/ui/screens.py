@@ -3,6 +3,7 @@ import sys
 import tkinter as tk
 from tkinter import font as tkfont
 from tkinter import ttk
+from typing import List
 
 from src.ui.widgets import Pill
 
@@ -22,7 +23,8 @@ from src.ui.tiles import (
     ReservedTile, 
     ModeSelectionTile, 
     FanSpeedSelectionTile, 
-    SettingsTile
+    SettingsTile,
+    BaseTile
 )
 
 # Thermostat imports (these should be imported from main app)
@@ -58,14 +60,14 @@ class MainScreen(tk.Frame):
         self.right.grid(row=0, column=2, sticky='ns')
 
         # Create and grid the tiles
-        self.left_tiles = [
-            WifiTile(self.left, 100, self.app),
-            WeatherIndicationTile(self.left, 100, lambda: app.router.show('weather')),
-            OutsideTempTile(self.left, 100),
-            InformationTile(self.left, 100, lambda: app.router.show('info'))
+        self.left_tiles: List[BaseTile] = [
+            WifiTile(self.left, 100, app),
+            WeatherIndicationTile(self.left, 100, app, command=lambda: app.router.show('weather')),
+            OutsideTempTile(self.left, 100, app),
+            InformationTile(self.left, 100, command=lambda: app.router.show('info'))
         ]
         
-        self.right_tiles = [
+        self.right_tiles: List[BaseTile] = [
             ReservedTile(self.right, 100),
             ModeSelectionTile(self.right, 100, lambda: app.router.show('mode')),
             FanSpeedSelectionTile(self.right, 100, lambda: app.router.show('fan-speed-selection')),

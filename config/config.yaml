@@ -13,5 +13,5 @@ location:
   enable: {gpsd: false, wifi: false, ip: true}
   wifi: {iface: wlan0, provider: mls, mls_api_key: null}
   ip: {provider: ip-api}
-weather: {provider: openweathermap, api_key: "", units: imperial, refresh_minutes: 10}
+weather: {provider: openweathermap, units: imperial, refresh_minutes: 10}
 ui: {time_24h: false, safe_margin_px: 24}
