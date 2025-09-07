@@ -1,12 +1,11 @@
 from __future__ import annotations
-
-import time
 import os
+import time
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Callable, List, Optional, Any, Dict
 
-from src.thermostat.geolocate import resolve_location
+from src.thermostat.geolocate import GeoLocator
 from src.thermostat.weather import owm_current
 
 class WeatherCondition(Enum):
@@ -28,6 +27,8 @@ class WeatherData:
     condition: WeatherCondition
     description: Optional[str]
     icon: Optional[str]
+    city: Optional[str]
+    region: Optional[str]
     last_updated: float
 
 def _to_condition(s: Optional[str]) -> WeatherCondition:
@@ -50,14 +51,23 @@ class WeatherMonitor:
     Periodically polls weather and notifies listeners with WeatherData.
     Mirrors NetworkMonitor pattern (add_listener/start_monitoring).
     """
-    def __init__(self, cfg, min_period_sec: int = 180):
+    def __init__(self, cfg, locator: GeoLocator | None = None, min_period_sec: int = 180):
         self._cfg = cfg
         self._min_period = max(30, int(min_period_sec))
-        self._listeners = []
+        self._listeners: List[Callable[[WeatherData], None]] = []
         self._app = None
         self._last_update = 0.0
-        self._current = None
+        self._current: Optional[WeatherData] = None
 
+        # Use the provided GeoLocator or create a default one
+        self._locator = locator or GeoLocator(
+            interface="wlan0",
+            ip_ttl_sec=20 * 60,
+            wifi_ttl_sec=60 * 60,
+            use_wifi=False,
+            cache_file="/tmp/pi_loc_cache.json",
+            http_timeout_sec=5,
+        )
         weather_cfg = getattr(cfg, 'weather', None)
         self.units = getattr(weather_cfg, 'units', 'metric')
         self._api_key = os.getenv('OPENWEATHERMAP_API_KEY')
@@ -127,39 +137,32 @@ class WeatherMonitor:
         self._after(1000, self._tick)
 
     def _fetch(self) -> Optional[WeatherData]:
+        # Always re-check env before use
+        self._api_key = self._api_key or os.getenv('OPENWEATHERMAP_API_KEY')
         if not self._api_key:
             return None
-        loc = resolve_location(self._cfg)
-        if not loc:
+
+        loc = self._locator.get_location() or {}
+        lat = loc.get('lat'); lon = loc.get('lon')
+        city = loc.get('city'); region = loc.get('region')
+        if lat is None or lon is None:
             return None
 
-        raw: Dict[str, Any] = owm_current(
-            loc['lat'],
-            loc['lon'],
-            self._api_key,
-            self.units
-        ) or {}
+        raw: Dict[str, Any] = owm_current(float(lat), float(lon), self._api_key, self.units) or {}
 
-        # Expected shape (from your usage): {'temp': <float>, ...}
         temp = raw.get('temp')
         temp_c: Optional[float] = None
         temp_f: Optional[float] = None
-        try:
-            if temp is not None:
-                t = float(temp)
-                if self.units == 'imperial':
-                    temp_f = t
-                    temp_c = (t - 32.0) * 5.0 / 9.0
-                else:
-                    temp_c = t
-                    temp_f = (t * 9.0 / 5.0) + 32.0
-        except Exception:
-            pass
+        if isinstance(temp, (int, float)):
+            if self.units == 'imperial':
+                temp_f = float(temp)
+                temp_c = (temp_f - 32.0) * 5.0 / 9.0
+            else:
+                temp_c = float(temp)
+                temp_f = (temp_c * 9.0 / 5.0) + 32.0
 
-        # Try to find a condition signal
         cond_main = raw.get('main') or raw.get('condition')
         if not cond_main:
-            # Fallback to OWM "weather[0]" shape if your wrapper exposes it
             wx_list = raw.get('weather') or []
             if wx_list:
                 cond_main = (wx_list[0] or {}).get('main')
@@ -176,12 +179,13 @@ class WeatherMonitor:
             if wx_list:
                 icon = (wx_list[0] or {}).get('icon')
 
-        condition = _to_condition(cond_main)
         return WeatherData(
             temp_c=temp_c,
             temp_f=temp_f,
-            condition=condition,
+            condition=_to_condition(cond_main),
             description=description,
             icon=icon,
+            city=city,
+            region=region,
             last_updated=time.time(),
         )

@@ -28,7 +28,6 @@ from src.ui.tiles import (
 )
 
 # Thermostat imports (these should be imported from main app)
-from src.thermostat.geolocate import resolve_location
 from src.thermostat.weather import owm_current, fmt_temp
 
 class Screen(tk.Frame):
@@ -203,12 +202,20 @@ class WeatherScreen(Screen):
         self.lbl=tk.Label(self.body, text='--', fg=COL_TEXT, bg=COL_BG, font=('DejaVu Sans', 64, 'bold')); self.lbl.pack(pady=8)
         self.desc=tk.Label(self.body, text='', fg=COL_TEXT, bg=COL_BG, font=('DejaVu Sans', 24)); self.desc.pack(pady=4)
         tk.Button(self.body, text='Refresh', command=self._refresh).pack(pady=8)
+
     def _refresh(self):
-        loc=resolve_location(self.app.cfg)
-        if loc and self.app.cfg.weather.api_key:
-            data=owm_current(loc['lat'], loc['lon'], self.app.cfg.weather.api_key, self.app.cfg.weather.units)
-            self.lbl.config(text=fmt_temp(data.get('temp') if data else None, self.app.cfg.weather.units))
-            self.desc.config(text=(data.get('desc') if data else '') or '')
+        # Use the shared GeoLocator on the app
+        loc = getattr(self.app, 'locator', None).get_location() if getattr(self.app, 'locator', None) else {}
+        lat, lon = loc.get('lat'), loc.get('lon')
+        api_key = os.getenv('OPENWEATHERMAP_API_KEY')  # env-only key
+
+        if lat is None or lon is None or not api_key:
+            # Clear or keep previous; here we just leave as-is
+            return
+
+        data = owm_current(float(lat), float(lon), api_key, self.app.cfg.weather.units)
+        self.lbl.config(text=fmt_temp(data.get('temp') if data else None, self.app.cfg.weather.units))
+        self.desc.config(text=(data.get('desc') if data else '') or '')
 
 class InfoScreen(Screen):
     def __init__(self, app):

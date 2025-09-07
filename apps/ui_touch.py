@@ -2,8 +2,6 @@ import os
 import sys
 import signal
 import argparse
-import time
-import datetime as dt
 import math
 
 # Add the root directory to Python path
@@ -27,9 +25,8 @@ from src.ui.thermostat_monitor import ThermostatMonitor, ThermostatSnapshot
 
 # Then import from src
 import tkinter as tk
-from src.thermostat.runtime import load_config, build_runtime, apply_schedule_if_due
-from src.thermostat.geolocate import resolve_location
-from src.thermostat.weather import owm_current, fmt_temp
+from src.thermostat.runtime import load_config, build_runtime
+from src.thermostat.geolocate import GeoLocator
 
 REFRESH_MS=1000; SCHED_MS=60000
 WX_LIMIT_PER_DAY = 1000
@@ -51,8 +48,6 @@ TEXT_MUTED    = UIConfig.text_muted
 # Safe-margin default if not present in YAML config
 SAFE_MARGIN_DEFAULT = getattr(UIConfig, "safe_margin_px", 24)
 
-def c_to_f(c): return (c * 9.0 / 5.0) + 32.0
-
 class TouchUI(tk.Tk):
     def __init__(self, fullscreen=True, hide_cursor=True):
         super().__init__()
@@ -72,9 +67,20 @@ class TouchUI(tk.Tk):
         self.ctrl, self.act, self.gpio_cleanup = build_runtime(self.cfg)
         self.router = Router(self)
 
+        # Create a shared GeoLocator (configure once)
+        self.locator = GeoLocator(
+            interface="wlan0",
+            ip_ttl_sec=20 * 60,          # 20 minutes
+            wifi_ttl_sec=60 * 60,        # 60 minutes
+            use_wifi=False,              # set True if you enable Wi‑Fi stats
+            cache_file="/tmp/pi_loc_cache.json",
+            http_timeout_sec=5,
+        )
+
         # Monitors
         self.network = NetworkMonitor()
-        self.weather_monitor = WeatherMonitor(self.cfg, min_period_sec=WX_MIN)
+        # Pass the shared locator into WeatherMonitor
+        self.weather_monitor = WeatherMonitor(self.cfg, locator=self.locator, min_period_sec=WX_MIN)
         self.thermo_monitor = ThermostatMonitor(self.ctrl, self.cfg, period_ms=REFRESH_MS)
 
         # Screens
@@ -101,7 +107,6 @@ class TouchUI(tk.Tk):
         self.thermo_monitor.start_monitoring(self)
 
     def _on_thermo_update(self, snap: ThermostatSnapshot) -> None:
-        # Update UI like the old loop
         self.main.set_temp(snap.temp_text)
         self.main.set_setpoints(snap.cool_disp, snap.heat_disp)
 
