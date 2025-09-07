@@ -23,6 +23,7 @@ from src.ui.screens import (
     WeatherScreen
 )
 from src.ui.widgets import Router
+from src.ui.thermostat_monitor import ThermostatMonitor, ThermostatSnapshot
 
 # Then import from src
 import tkinter as tk
@@ -66,17 +67,17 @@ class TouchUI(tk.Tk):
             self.config(cursor='none')
         self.bind('<Escape>', lambda e: self.attributes('-fullscreen', False))
 
-        # Load config and create runtime
+        # Load config and runtime
         self.cfg = load_config()
         self.ctrl, self.act, self.gpio_cleanup = build_runtime(self.cfg)
         self.router = Router(self)
 
-        # Create NetworkMonitor
+        # Monitors
         self.network = NetworkMonitor()
-        # Create WeatherMonitor (same pattern)
         self.weather_monitor = WeatherMonitor(self.cfg, min_period_sec=WX_MIN)
+        self.thermo_monitor = ThermostatMonitor(self.ctrl, self.cfg, period_ms=REFRESH_MS)
 
-        # Create screens
+        # Screens
         self.main = MainScreen(self)
         self.router.register('home', self.main)
         self.mode = ModeScreen(self)
@@ -92,38 +93,17 @@ class TouchUI(tk.Tk):
         self.schedule = ScheduleScreen(self)
         self.router.register('schedule', self.schedule)
         self.router.show('home')
-        self._last_wx = 0
 
-        # Start monitoring immediately (don't wait for first interval)
+        # Start monitors
         self.network.start_monitoring(self)
         self.weather_monitor.start_monitoring(self)
+        self.thermo_monitor.add_listener(self._on_thermo_update)
+        self.thermo_monitor.start_monitoring(self)
 
-        # Start other monitoring loops
-        # self.after(REFRESH_MS, self.loop)
-        # self.after(SCHED_MS, self.sched_loop)
-
-    # loops
-    # def loop(self):
-    #     t=self.ctrl.s.last_temp_c
-    #     temp = f'{c_to_f(t):.0f}' if (t is not None and self.cfg.weather.units=="imperial") else (f'{t:.0f}' if t is not None else '--')
-    #     self.main.set_temp(temp)
-    #     # Update setpoint pills if values available
-    #     cool_c = getattr(self.ctrl.s, 'cool_setpoint_c', getattr(self.cfg.control, 'cool_setpoint_c', None))
-    #     heat_c = getattr(self.ctrl.s, 'heat_setpoint_c', getattr(self.cfg.control, 'heat_setpoint_c', None))
-    #     if self.cfg.weather.units == "imperial":
-    #         cool = c_to_f(cool_c) if isinstance(cool_c, (int, float)) else None
-    #         heat = c_to_f(heat_c) if isinstance(heat_c, (int, float)) else None
-    #     else:
-    #         cool = cool_c if isinstance(cool_c, (int, float)) else None
-    #         heat = heat_c if isinstance(heat_c, (int, float)) else None
-    #     self.main.set_setpoints(cool, heat)
-
-    #     self.ctrl.tick()
-    #     self.after(REFRESH_MS, self.loop)
-
-    # def sched_loop(self):
-    #     apply_schedule_if_due(self.ctrl, dt.datetime.now())
-    #     self.after(SCHED_MS, self.sched_loop)
+    def _on_thermo_update(self, snap: ThermostatSnapshot) -> None:
+        # Update UI like the old loop
+        self.main.set_temp(snap.temp_text)
+        self.main.set_setpoints(snap.cool_disp, snap.heat_disp)
 
 def main():
     p=argparse.ArgumentParser(); p.add_argument('--windowed', action='store_true'); p.add_argument('--show-cursor', action='store_true'); a=p.parse_args()
