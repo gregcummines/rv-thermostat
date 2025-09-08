@@ -10,6 +10,7 @@ GeoLocator + OpenWeather helper
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shlex
@@ -131,6 +132,10 @@ class GeoLocator:
         # Load persisted cache if provided
         self._load_cache_file()
 
+        self._log = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
+        self._log.info("GeoLocator init iface=%s ip_ttl=%s wifi_ttl=%s use_wifi=%s cache=%s",
+                       interface, ip_ttl_sec, wifi_ttl_sec, use_wifi, cache_file)
+
     # ---------- Public API ----------
 
     def get_location(self) -> Dict[str, Any]:
@@ -161,7 +166,7 @@ class GeoLocator:
         ip = self._ip or {}
         wifi = self._wifi or {"wifi_count": 0, "sample": []}
 
-        return {
+        loc = {
             "city": ip.get("city"),
             "region": ip.get("region"),
             "lat": ip.get("lat"),
@@ -176,6 +181,8 @@ class GeoLocator:
             "wifi_sample": wifi.get("sample", []),
             "source": source,
         }
+        self._log.debug("Location: %s", {k: loc.get(k) for k in ("city", "region", "lat", "lon")})
+        return loc
 
     # ---------- Internal helpers ----------
 

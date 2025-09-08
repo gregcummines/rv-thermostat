@@ -1,66 +1,92 @@
+import logging
+import socket
+import subprocess
+import tkinter as tk
 from enum import Enum
 from typing import Callable, List
-import socket
-import tkinter as tk
 
 class NetworkStatus(Enum):
-    """Network connectivity states"""
-    CONNECTED = 'ok'          # WiFi + Internet
-    NO_INTERNET = 'no_internet'  # WiFi only
-    DISCONNECTED = 'disconnected'  # No WiFi
+    CONNECTED = 'ok'
+    NO_INTERNET = 'no_internet'
+    DISCONNECTED = 'disconnected'
 
 class NetworkMonitor:
     """Monitors network connectivity and notifies listeners of changes"""
     def __init__(self, check_interval_ms: int = 1000):
-        self._status = None
+        self._status: NetworkStatus | None = None
         self._interval = check_interval_ms
         self._listeners: List[Callable[[NetworkStatus], None]] = []
+        self._app: tk.Misc | None = None
+        self._running = False
+        self._log = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
+        self._log.info("NetworkMonitor init interval=%dms", check_interval_ms)
 
     def add_listener(self, callback: Callable[[NetworkStatus], None]) -> None:
-        """Add listener and immediately notify with current status"""
-        self._listeners.append(callback)
-        # Send current status to new listener if we have one
-        if self._status is not None:
-            try:
-                callback(self._status)
-            except Exception as e:
-                print(f"Error notifying new listener: {e}")
+        if callback not in self._listeners:
+            self._listeners.append(callback)
+            if self._status is not None:
+                try:
+                    callback(self._status)
+                except Exception:
+                    pass
 
     def remove_listener(self, callback: Callable[[NetworkStatus], None]) -> None:
-        if callback in self._listeners:
-            self._listeners.remove(callback)
-
-    def check_status(self) -> NetworkStatus:
         try:
-            import subprocess
-            result = subprocess.run(['iwconfig'], capture_output=True, text=True)
-            if "ESSID:" not in result.stdout:
-                return NetworkStatus.DISCONNECTED
-            
-            try:
-                socket.create_connection(("8.8.8.8", 53), timeout=1)
-                return NetworkStatus.CONNECTED
-            except OSError:
-                return NetworkStatus.NO_INTERNET
-                
-        except Exception as e:
-            print(f"Network check error: {e}")
-            return NetworkStatus.DISCONNECTED
+            self._listeners.remove(callback)
+        except ValueError:
+            pass
 
     def start_monitoring(self, app: tk.Misc) -> None:
-        """Start periodic network status checking"""
+        if self._running:
+            return
+        self._running = True
+        self._app = app
+        self._log.info("Starting monitor")
+        self._tick()  # immediate first check
+
+    def stop(self) -> None:
+        self._running = False
+        self._app = None
+        self._log.info("Stopped monitor")
+
+    def _schedule_next(self):
+        if self._running and self._app:
+            try:
+                self._app.after(self._interval, self._tick)
+            except Exception:
+                pass
+
+    def _tick(self):
         try:
-            # Force initial status check and notify
             current = self.check_status()
-            self._status = current
-            # Notify all listeners of initial status
-            for listener in self._listeners:
-                try:
-                    listener(current)
-                except Exception as e:
-                    print(f"Error in network status listener: {e}")
+            if current != self._status:
+                self._log.info("Network status changed %s -> %s",
+                               getattr(self._status, "name", None), current.name)
+                self._status = current
+                for listener in list(self._listeners):
+                    try:
+                        listener(current)
+                    except Exception as e:
+                        self._log.error("Listener error: %s", e)
         except Exception as e:
-            print(f"Error checking network status: {e}")
-            
-        # Schedule next check
-        app.after(self._interval, lambda: self.start_monitoring(app))
+            self._log.exception("Network tick failed: %s", e)
+            self._status = NetworkStatus.DISCONNECTED
+        finally:
+            self._schedule_next()
+
+    def check_status(self) -> NetworkStatus:
+        # Check Wi-Fi association
+        try:
+            result = subprocess.run(['iwconfig'], capture_output=True, text=True, timeout=1.5)
+            if "ESSID:" not in result.stdout:
+                return NetworkStatus.DISCONNECTED
+        except Exception as e:
+            self._log.warning("iwconfig failed: %s", e)
+            return NetworkStatus.DISCONNECTED
+
+        # Check internet reachability
+        try:
+            socket.create_connection(("8.8.8.8", 53), timeout=1)
+            return NetworkStatus.CONNECTED
+        except OSError:
+            return NetworkStatus.NO_INTERNET

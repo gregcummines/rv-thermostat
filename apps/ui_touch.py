@@ -12,13 +12,14 @@ from src.ui.config import UIConfig
 from src.ui.network import NetworkMonitor
 from src.ui.weather import WeatherMonitor
 from src.ui.screens import (
-    FanScreen, 
-    InfoScreen, 
-    MainScreen, 
-    ModeScreen, 
-    ScheduleScreen, 
-    SettingsScreen, 
-    WeatherScreen
+    FanScreen,
+    InfoScreen,
+    MainScreen,
+    ModeScreen,
+    ScheduleScreen,
+    SettingsScreen,
+    WeatherScreen,
+    LogScreen,     # NEW
 )
 from src.ui.widgets import Router
 from src.ui.thermostat_monitor import ThermostatMonitor, ThermostatSnapshot
@@ -27,6 +28,7 @@ from src.ui.thermostat_monitor import ThermostatMonitor, ThermostatSnapshot
 import tkinter as tk
 from src.thermostat.runtime import load_config, build_runtime
 from src.thermostat.geolocate import GeoLocator
+from src.thermostat.logging_config import setup_logging, resolve_logging_from_env_and_cfg
 
 REFRESH_MS=1000; SCHED_MS=60000
 WX_LIMIT_PER_DAY = 1000
@@ -62,24 +64,37 @@ class TouchUI(tk.Tk):
             self.config(cursor='none')
         self.bind('<Escape>', lambda e: self.attributes('-fullscreen', False))
 
-        # Load config and runtime
+        # Load config first so logging can read optional cfg.logging
         self.cfg = load_config()
+
+        # Initialize logging (env first, then cfg fallback)
+        enabled, level, log_file = resolve_logging_from_env_and_cfg(self.cfg)
+        # Default file path if requested but not set: logs/app.log under repo
+        if log_file is None and os.getenv("RVT_LOG_FILE_DEFAULT", "0") in ("1", "true", "yes"):
+            log_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs", "app.log")
+            os.makedirs(os.path.dirname(log_file), exist_ok=True)
+        setup_logging(enabled=enabled, level=level, log_file=log_file)
+
+        import logging
+        self._log = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
+        self._log.info("TouchUI starting (fullscreen=%s hide_cursor=%s)", fullscreen, hide_cursor)
+
+        # Runtime controller and router
         self.ctrl, self.act, self.gpio_cleanup = build_runtime(self.cfg)
         self.router = Router(self)
 
-        # Create a shared GeoLocator (configure once)
+        # Shared GeoLocator
         self.locator = GeoLocator(
             interface="wlan0",
-            ip_ttl_sec=20 * 60,          # 20 minutes
-            wifi_ttl_sec=60 * 60,        # 60 minutes
-            use_wifi=False,              # set True if you enable Wi‑Fi stats
+            ip_ttl_sec=20 * 60,
+            wifi_ttl_sec=60 * 60,
+            use_wifi=False,
             cache_file="/tmp/pi_loc_cache.json",
             http_timeout_sec=5,
         )
 
         # Monitors
         self.network = NetworkMonitor()
-        # Pass the shared locator into WeatherMonitor
         self.weather_monitor = WeatherMonitor(self.cfg, locator=self.locator, min_period_sec=WX_MIN)
         self.thermo_monitor = ThermostatMonitor(self.ctrl, self.cfg, period_ms=REFRESH_MS)
 
@@ -98,6 +113,7 @@ class TouchUI(tk.Tk):
         self.router.register('info', self.info)
         self.schedule = ScheduleScreen(self)
         self.router.register('schedule', self.schedule)
+        self.router.register('logs', LogScreen(self))   # NEW
         self.router.show('home')
 
         # Start monitors

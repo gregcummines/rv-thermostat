@@ -4,6 +4,8 @@ import tkinter as tk
 from tkinter import font as tkfont
 from tkinter import ttk
 from typing import List
+import time
+import logging
 
 from src.ui.widgets import Pill
 
@@ -16,15 +18,16 @@ SAFE_MARGIN_DEFAULT = 24
 
 # Local imports (relative to this module)
 from src.ui.tiles import (
-    WifiTile, 
-    WeatherIndicationTile, 
-    OutsideTempTile, 
-    InformationTile, 
-    ReservedTile, 
-    ModeSelectionTile, 
-    FanSpeedSelectionTile, 
+    WifiTile,
+    WeatherIndicationTile,
+    OutsideTempTile,
+    InformationTile,
+    # Replace ReservedTile with LogTile
+    LogTile,
+    ModeSelectionTile,
+    FanSpeedSelectionTile,
     SettingsTile,
-    BaseTile
+    BaseTile,
 )
 
 # Thermostat imports (these should be imported from main app)
@@ -61,16 +64,16 @@ class MainScreen(tk.Frame):
         # Create and grid the tiles
         self.left_tiles: List[BaseTile] = [
             WifiTile(self.left, 100, app),
-            WeatherIndicationTile(self.left, 100, app, command=lambda: app.router.show('weather')),
+            WeatherIndicationTile(self.left, 100, app),
             OutsideTempTile(self.left, 100, app),
-            InformationTile(self.left, 100, command=lambda: app.router.show('info'))
+            InformationTile(self.left, 100, command=lambda: app.router.show('info')),
         ]
         
         self.right_tiles: List[BaseTile] = [
-            ReservedTile(self.right, 100),
-            ModeSelectionTile(self.right, 100, lambda: app.router.show('mode')),
-            FanSpeedSelectionTile(self.right, 100, lambda: app.router.show('fan-speed-selection')),
-            SettingsTile(self.right, 100, lambda: app.router.show('settings'))
+            LogTile(self.right, 100, app),  # navigates to logs
+            ModeSelectionTile(self.right, 100, command=lambda: app.router.show('mode')),
+            FanSpeedSelectionTile(self.right, 100, command=lambda: app.router.show('fan')),
+            SettingsTile(self.right, 100, command=lambda: app.router.show('settings')),
         ]
 
         # Configure center area
@@ -272,3 +275,76 @@ class ScheduleScreen(Screen):
         from src.thermostat.schedule import save_schedule
         save_schedule(self.path, self.sch)
     def _save_all(self): self._save_day()
+
+class LogTextHandler(logging.Handler):
+    """Logging handler that writes lines to a Tk Text widget with wrapping."""
+    def __init__(self, app, text_widget: tk.Text, level=logging.INFO):
+        super().__init__(level=level)
+        self.app = app
+        self.text = text_widget
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            short = getattr(record, "shortname", record.name.rsplit('.', 1)[-1])
+            line = f"{time.strftime('%H:%M:%S')} {record.levelname} [{short}.{record.funcName}] {record.getMessage()}\n"
+            self.app.after(0, self._append, line)
+        except Exception:
+            pass
+
+    def _append(self, msg: str) -> None:
+        try:
+            self.text.configure(state="normal")
+            self.text.insert("end", msg)
+            self.text.see("end")
+            self.text.configure(state="disabled")
+        except Exception:
+            pass
+
+class LogScreen(tk.Frame):
+    """Scrollable, real-time log view."""
+    def __init__(self, app):
+        super().__init__(app.router, bg=COL_BG)
+        self.app = app
+        header = tk.Label(self, text="Logs", fg=COL_TEXT, bg=COL_BG,
+                          font=('DejaVu Sans', 20, 'bold'))
+        header.pack(side="top", pady=8)
+
+        container = tk.Frame(self, bg=COL_BG)
+        container.pack(fill="both", expand=True,
+                       padx=SAFE_MARGIN_DEFAULT, pady=(0, SAFE_MARGIN_DEFAULT))
+
+        yscroll = tk.Scrollbar(container, orient="vertical")
+        yscroll.pack(side="right", fill="y")
+
+        self.text = tk.Text(
+            container,
+            wrap="word",                 # enable word wrapping
+            fg=COL_TEXT,
+            bg="#111",
+            insertbackground=COL_TEXT,
+            font=('DejaVu Sans Mono', 11),
+            undo=False,
+            padx=6,
+            pady=4
+        )
+        self.text.pack(side="left", fill="both", expand=True)
+        self.text.configure(state="disabled")
+        self.text['yscrollcommand'] = yscroll.set
+        yscroll['command'] = self.text.yview
+
+        btns = tk.Frame(self, bg=COL_BG)
+        btns.pack(side="bottom", pady=6)
+        tk.Button(btns, text="Clear", command=self._clear).pack(side="left", padx=6)
+        tk.Button(btns, text="Back", command=lambda: app.router.show('home')).pack(side="left", padx=6)
+
+        self._handler = LogTextHandler(app, self.text, level=logging.DEBUG)
+        logging.getLogger().addHandler(self._handler)
+
+    def destroy(self):
+        logging.getLogger().removeHandler(self._handler)
+        super().destroy()
+
+    def _clear(self):
+        self.text.configure(state="normal")
+        self.text.delete("1.0", "end")
+        self.text.configure(state="disabled")

@@ -1,6 +1,5 @@
 import os
 import tkinter as tk
-
 from src.ui.screens import COL_BG
 from src.ui.network import NetworkStatus
 from src.ui.weather import WeatherData, WeatherCondition
@@ -274,3 +273,15 @@ class SettingsTile(BaseTile):
             except Exception:
                 pass
             self.create_image(size//2, size//2, image=self._photo)
+
+class LogTile(BaseTile):
+    """Open the Logs screen"""
+    def __init__(self, parent, size, app):
+        super().__init__(parent, size, command=lambda: app.router.show('logs'))
+        self._label = "Logs"
+
+    def draw(self, size):
+        super().draw(size)
+        # simple icon/text
+        self.create_text(size//2, size//2, text=self._label, fill="#FFF",
+                         font=('DejaVu Sans', max(14, int(size*0.2)), 'bold'))

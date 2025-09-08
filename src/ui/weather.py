@@ -1,6 +1,7 @@
 from __future__ import annotations
 import os
 import time
+import logging
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Callable, List, Optional, Any, Dict
@@ -71,7 +72,9 @@ class WeatherMonitor:
         weather_cfg = getattr(cfg, 'weather', None)
         self.units = getattr(weather_cfg, 'units', 'metric')
         self._api_key = os.getenv('OPENWEATHERMAP_API_KEY')
-            
+        self._log = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
+        self._log.info("Init WeatherMonitor units=%s min_period=%ss", self.units, self._min_period)
+
     def add_listener(self, cb: Callable[[WeatherData], None]) -> None:
         if cb not in self._listeners:
             self._listeners.append(cb)
@@ -91,6 +94,7 @@ class WeatherMonitor:
     def start_monitoring(self, app) -> None:
         """Begin periodic polling using Tk's app.after (same shape as NetworkMonitor)."""
         self._app = app
+        self._log.info("Starting monitor")
         # Kick off immediately; subsequent polls respect min_period
         self._after(0, self._tick)
 
@@ -127,12 +131,16 @@ class WeatherMonitor:
                     (data.temp_c != self._current.temp_c) or
                     (data.condition is not self._current.condition)
                 ):
+                    self._log.info("Weather updated: %s, %s temp=%.1fC/%.1fF cond=%s",
+                                   data.city, data.region,
+                                   (data.temp_c if data.temp_c is not None else float('nan')),
+                                   (data.temp_f if data.temp_f is not None else float('nan')),
+                                   data.condition.name)
                     self._current = data
                     self._notify(data)
                 self._last_update = now
-        except Exception:
-            # Swallow errors; try again later
-            pass
+        except Exception as e:
+            self._log.exception("Tick failed: %s", e)
 
         self._after(1000, self._tick)
 
@@ -140,13 +148,16 @@ class WeatherMonitor:
         # Always re-check env before use
         self._api_key = self._api_key or os.getenv('OPENWEATHERMAP_API_KEY')
         if not self._api_key:
+            self._log.warning("Missing OPENWEATHERMAP_API_KEY; skipping fetch")
             return None
 
         loc = self._locator.get_location() or {}
-        lat = loc.get('lat'); lon = loc.get('lon')
-        city = loc.get('city'); region = loc.get('region')
+        lat = loc.get('lat'); lon = loc.get('lon'); city = loc.get('city'); region = loc.get('region')
         if lat is None or lon is None:
+            self._log.warning("No lat/lon from GeoLocator; loc=%s", loc)
             return None
+
+        self._log.debug("Fetching OWM lat=%.5f lon=%.5f city=%s region=%s units=%s", float(lat), float(lon), city, region, self.units)
 
         raw: Dict[str, Any] = owm_current(float(lat), float(lon), self._api_key, self.units) or {}
 
