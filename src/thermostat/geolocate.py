@@ -17,12 +17,17 @@ import shlex
 import shutil
 import subprocess
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 try:
     import requests  # type: ignore
 except Exception:  # pragma: no cover
     requests = None
+
+if TYPE_CHECKING:
+    from src.thermostat.gps_reader import GPSReader
+else:
+    GPSReader = None  # type: ignore
 
 
 # =============================================================================
@@ -113,6 +118,7 @@ class GeoLocator:
         use_wifi: bool = False,
         cache_file: Optional[str] = None,
         http_timeout_sec: int = 5,
+        gps_reader: Optional['GPSReader'] = None,
     ) -> None:
         self.interface = interface
         self.ip_ttl_sec = max(1, int(ip_ttl_sec))
@@ -132,17 +138,33 @@ class GeoLocator:
         # Load persisted cache if provided
         self._load_cache_file()
 
+        # Prefer GPS if provided and enabled
+        gr = gps_reader
+        self._gps_reader = gr if (gr and getattr(gr, "is_enabled", lambda: False)()) else None
+
         self._log = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
-        self._log.info("GeoLocator init iface=%s ip_ttl=%s wifi_ttl=%s use_wifi=%s cache=%s",
-                       interface, ip_ttl_sec, wifi_ttl_sec, use_wifi, cache_file)
+        self._log.info("GeoLocator init iface=%s ip_ttl=%s wifi_ttl=%s use_wifi=%s cache=%s (gps_reader=%s)",
+                       interface, ip_ttl_sec, wifi_ttl_sec, use_wifi, cache_file, bool(self._gps_reader))
 
     # ---------- Public API ----------
 
-    def get_location(self) -> Dict[str, Any]:
+    def get_location(self) -> dict | None:
         """
-        Return city/region/lat/lon + ages and Wi-Fi stats.
-        Uses cached values if fresh; otherwise refreshes as needed.
+        Returns dict with at least lat/lon.
+        Prefers GPSReader (if injected/enabled), then falls back to existing Wi‑Fi/IP logic.
         """
+        # 1) Prefer GPS
+        if self._gps_reader is not None:
+            gps_loc = None
+            try:
+                gps_loc = self._gps_reader.get_location_if_ready()
+            except Exception as e:
+                self._log.debug("GPSReader error: %s", e)
+            if gps_loc:
+                self._log.debug("GeoLocator: using GPS location %s", gps_loc)
+                return gps_loc
+
+        # 2) Fallbacks (use your existing Wi‑Fi/IP code below)
         now = int(time.time())
 
         # Periodic Wi-Fi scan (diagnostic only; no WPS resolution here)

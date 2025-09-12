@@ -29,11 +29,12 @@ import tkinter as tk
 from src.thermostat.runtime import load_config, build_runtime
 from src.thermostat.geolocate import GeoLocator
 from src.thermostat.logging_config import setup_logging, resolve_logging_from_env_and_cfg
+from src.thermostat.gps_reader import GPSReader  # ADD
 
 REFRESH_MS=1000; SCHED_MS=60000
 WX_LIMIT_PER_DAY = 1000
 # Add small buffer (+5s) and a floor of 90s
-WX_MIN = max(90, math.ceil(86400 / WX_LIMIT_PER_DAY) + 5)
+WX_MIN = max(90, int(math.ceil(86400 / max(1, WX_LIMIT_PER_DAY)) + 5))  # seconds between weather fetches
 
 # === UI theme wiring (B2 for your branch) ================================
 # Map existing globals to UIConfig so the rest of the file keeps working.
@@ -84,6 +85,7 @@ class TouchUI(tk.Tk):
         self.router = Router(self)
 
         # Shared GeoLocator
+        self.gps = GPSReader(enabled=True)  # ADD: hot-plug aware gpsd reader
         self.locator = GeoLocator(
             interface="wlan0",
             ip_ttl_sec=20 * 60,
@@ -91,6 +93,7 @@ class TouchUI(tk.Tk):
             use_wifi=False,
             cache_file="/tmp/pi_loc_cache.json",
             http_timeout_sec=5,
+            gps_reader=self.gps,  # ADD: prefer GPS, fall back to WiFi/IP
         )
 
         # Monitors

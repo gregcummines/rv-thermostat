@@ -1,7 +1,5 @@
 from __future__ import annotations
-import os
-import time
-import logging
+import os, time, logging
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Callable, List, Optional, Any, Dict
@@ -43,24 +41,32 @@ def _to_condition(s: Optional[str]) -> WeatherCondition:
     if 'rain' in k: return WeatherCondition.RAIN
     if 'snow' in k: return WeatherCondition.SNOW
     if 'mist' in k: return WeatherCondition.MIST
-    if 'fog' in k: return WeatherCondition.FOG
+    if 'fog'  in k: return WeatherCondition.FOG
     if 'haze' in k: return WeatherCondition.HAZE
     return WeatherCondition.UNKNOWN
 
 class WeatherMonitor:
     """
-    Periodically polls weather and notifies listeners with WeatherData.
-    Mirrors NetworkMonitor pattern (add_listener/start_monitoring).
+    Fetches weather no more often than min_period_sec.
+    Internal loop wakes every loop_ms (default 5000 ms) to check if due.
     """
-    def __init__(self, cfg, locator: GeoLocator | None = None, min_period_sec: int = 180):
+    def __init__(self, cfg, locator: GeoLocator | None = None,
+                 min_period_sec: int = 180,
+                 loop_ms: int = 5000):
         self._cfg = cfg
-        self._min_period = max(30, int(min_period_sec))
+        self._min_period = max(30, int(min_period_sec))  # enforce sensible floor
+        self._loop_ms = max(1000, int(loop_ms))
         self._listeners: List[Callable[[WeatherData], None]] = []
         self._app = None
-        self._last_update = 0.0
         self._current: Optional[WeatherData] = None
 
-        # Use the provided GeoLocator or create a default one
+        # Separate timestamps
+        self._last_fetch: float = 0.0
+        self._last_notify: float = 0.0
+
+        # Behavior: set to True if you want rapid retry on failure
+        self._retry_on_fail = False
+
         self._locator = locator or GeoLocator(
             interface="wlan0",
             ip_ttl_sec=20 * 60,
@@ -73,94 +79,98 @@ class WeatherMonitor:
         self.units = getattr(weather_cfg, 'units', 'metric')
         self._api_key = os.getenv('OPENWEATHERMAP_API_KEY')
         self._log = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
-        self._log.info("Init WeatherMonitor units=%s min_period=%ss", self.units, self._min_period)
+        self._log.info("Init units=%s min_period=%ss loop_ms=%d", self.units, self._min_period, self._loop_ms)
 
-    def add_listener(self, cb: Callable[[WeatherData], None]) -> None:
-        if cb not in self._listeners:
-            self._listeners.append(cb)
-            # Immediately push last value if we have one
-            if self._current is not None:
-                try:
-                    cb(self._current)
-                except Exception:
-                    pass
+    def add_listener(self, fn: Callable[[WeatherData], None]) -> None:
+        if fn not in self._listeners:
+            self._listeners.append(fn)
+            if self._current:
+                try: fn(self._current)
+                except Exception: pass
 
-    def remove_listener(self, cb: Callable[[WeatherData], None]) -> None:
-        try:
-            self._listeners.remove(cb)
-        except ValueError:
-            pass
+    def remove_listener(self, fn: Callable[[WeatherData], None]) -> None:
+        try: self._listeners.remove(fn)
+        except ValueError: pass
 
     def start_monitoring(self, app) -> None:
-        """Begin periodic polling using Tk's app.after (same shape as NetworkMonitor)."""
+        if self._app is not None:
+            return
         self._app = app
-        self._log.info("Starting monitor")
-        # Kick off immediately; subsequent polls respect min_period
-        self._after(0, self._tick)
+        self._log.info("Starting monitor loop")
+        # Immediate first attempt
+        self._schedule(0, self._tick)
 
     def stop(self) -> None:
         self._app = None
+        self._log.info("Stopped monitor")
 
-    # internals
-    def _after(self, ms: int, fn) -> None:
-        if self._app is not None:
-            try:
-                self._app.after(ms, fn)
-            except Exception:
-                pass
-
-    def _notify(self, data: WeatherData) -> None:
-        for cb in list(self._listeners):
-            try:
-                cb(data)
-            except Exception:
-                # Keep others firing even if one listener explodes
-                pass
+    def _schedule(self, ms: int, fn) -> None:
+        if self._app:
+            try: self._app.after(ms, fn)
+            except Exception: pass
 
     def _tick(self) -> None:
         now = time.time()
-        if (now - self._last_update) < self._min_period:
-            self._after(1000, self._tick)
+        due_in = self._min_period - (now - self._last_fetch)
+        if self._last_fetch == 0 or due_in <= 0:
+            self._do_fetch_cycle(now)
+        # Schedule next loop wake
+        self._schedule(self._loop_ms, self._tick)
+
+    def _do_fetch_cycle(self, now: float) -> None:
+        self._api_key = self._api_key or os.getenv('OPENWEATHERMAP_API_KEY')
+        if not self._api_key:
+            self._log.debug("Fetch skipped: no API key")
+            if not self._retry_on_fail:
+                self._last_fetch = now  # avoid hammering every loop
+            return
+
+        loc = self._locator.get_location() or {}
+        lat = loc.get('lat'); lon = loc.get('lon')
+        city = loc.get('city'); region = loc.get('region')
+        if lat is None or lon is None:
+            self._log.debug("Fetch skipped: location unavailable %s", loc)
+            if not self._retry_on_fail:
+                self._last_fetch = now
             return
 
         try:
-            data = self._fetch()
-            if data is not None:
-                # Only notify if changed or first value
-                if (self._current is None) or (
-                    (data.temp_c != self._current.temp_c) or
-                    (data.condition is not self._current.condition)
-                ):
-                    self._log.info("Weather updated: %s, %s temp=%.1fC/%.1fF cond=%s",
-                                   data.city, data.region,
-                                   (data.temp_c if data.temp_c is not None else float('nan')),
-                                   (data.temp_f if data.temp_f is not None else float('nan')),
-                                   data.condition.name)
-                    self._current = data
-                    self._notify(data)
-                self._last_update = now
+            raw: Dict[str, Any] = owm_current(float(lat), float(lon), self._api_key, self.units) or {}
         except Exception as e:
-            self._log.exception("Tick failed: %s", e)
+            self._log.warning("Fetch error: %s", e)
+            if not self._retry_on_fail:
+                self._last_fetch = now
+            return
 
-        self._after(1000, self._tick)
+        data = self._normalize(raw, city, region)
+        self._last_fetch = now  # ALWAYS advance fetch timestamp
+        if data is None:
+            self._log.debug("Normalization returned None")
+            return
 
-    def _fetch(self) -> Optional[WeatherData]:
-        # Always re-check env before use
-        self._api_key = self._api_key or os.getenv('OPENWEATHERMAP_API_KEY')
-        if not self._api_key:
-            self._log.warning("Missing OPENWEATHERMAP_API_KEY; skipping fetch")
+        changed = (
+            self._current is None or
+            data.temp_c != self._current.temp_c or
+            data.condition is not self._current.condition
+        )
+
+        if changed:
+            self._current = data
+            self._last_notify = now
+            self._log.info("Weather updated: %s, %s temp=%.1fC/%.1fF cond=%s",
+                           data.city, data.region,
+                           (data.temp_c if data.temp_c is not None else float('nan')),
+                           (data.temp_f if data.temp_f is not None else float('nan')),
+                           data.condition.name)
+            for fn in list(self._listeners):
+                try: fn(data)
+                except Exception: pass
+        else:
+            self._log.debug("No change (%.1fs since last notify)", now - self._last_notify)
+
+    def _normalize(self, raw: Dict[str, Any], city: Optional[str], region: Optional[str]) -> Optional[WeatherData]:
+        if not raw:
             return None
-
-        loc = self._locator.get_location() or {}
-        lat = loc.get('lat'); lon = loc.get('lon'); city = loc.get('city'); region = loc.get('region')
-        if lat is None or lon is None:
-            self._log.warning("No lat/lon from GeoLocator; loc=%s", loc)
-            return None
-
-        self._log.debug("Fetching OWM lat=%.5f lon=%.5f city=%s region=%s units=%s", float(lat), float(lon), city, region, self.units)
-
-        raw: Dict[str, Any] = owm_current(float(lat), float(lon), self._api_key, self.units) or {}
-
         temp = raw.get('temp')
         temp_c: Optional[float] = None
         temp_f: Optional[float] = None
@@ -198,5 +208,5 @@ class WeatherMonitor:
             icon=icon,
             city=city,
             region=region,
-            last_updated=time.time(),
+            last_updated=time.time()
         )
